@@ -79,7 +79,7 @@ def sales_to_money(sales, prices, calendar, verbose=False):
     d_done = []
     iterator = d_list
     if verbose:
-        iterator = tqdm(iterator)
+        iterator = tqdm(iterator, desc='Sales to money spent')
 
     for dday in iterator:
         if dday in d_done:

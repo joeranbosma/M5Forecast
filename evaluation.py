@@ -15,6 +15,13 @@ from tqdm import tqdm as tqdm
 from flow import load_data, select_dates, sales_to_money, select_final_day
 
 
+def day_to_int(day, default=None):
+    try:
+        return int(day[2:])
+    except (ValueError, TypeError) as e:
+        return default
+
+
 class Referee(object):
     def __init__(self, sales_true, sales_train, prices, calendar, verbose=True):
         self.sales_true = sales_true
@@ -47,9 +54,14 @@ class Referee(object):
         last_train_day = select_final_day(sales_train)
         sales_train_final = select_dates(sales_train, day_end=last_train_day, num_days=28, include_metadata=True)
 
-        # Convert quantities sold to money spent
-        if verbose: print("Converting sales to money spent...")
-        sales_train_final = sales_to_money(sales_train_final, prices, calendar, verbose=verbose)
+        # Try to find money spent pre-converted
+        fn = os.environ['DATA_DIR'] + "/sales_train_money.csv"
+        if os.path.exists(fn):
+            sales_train_money = pd.read_csv(fn, index_col='id')
+            sales_train_final = select_dates(sales_train_money, day_end=last_train_day, num_days=28, include_metadata=True)
+        else:
+            # Convert quantities sold to money spent
+            sales_train_final = sales_to_money(sales_train_final, prices, calendar, verbose=verbose)
 
         # Calculate weights of each level
         if verbose: print("Calculating weights for each level...")
@@ -94,8 +106,9 @@ class Referee(object):
             Yt = self.sales_train[day_cols]
             Yt1 = Yt.shift(1, axis=1)
 
-        # Calculate number of sales since fist sale for each product
-        first_sold_day = Yt.replace(0, np.nan).apply(lambda x: int(x.first_valid_index()[2:]), axis=1)
+        # Calculate number of sales since fist sale for each product (default is required when unit is not sold in
+        # training period, which also makes its weight zero.)
+        first_sold_day = Yt.replace(0, np.nan).apply(lambda x: day_to_int(x.first_valid_index(), default=-1), axis=1)
         n = select_final_day(Yt) - first_sold_day  # list of numbers since first sale
 
         scale = ((Yt - Yt1) ** 2).sum(axis=1) / (n - 1)
@@ -193,6 +206,45 @@ def test_referee():
     metrics = ref.evaluate(sales_pred)
     # Timeit of evaluate: 301 ms ± 38 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
     print(metrics)
+
+
+class CrossValiDataGenerator:
+    """
+    Provide training and validation sets for cross-validation.
+    The validation sets are 28 days each and are numbered in anti-chronological order,
+    with the public leaderboard denoted as 0, the 28 days before that as 1, etc...
+
+    When training a (large) network and you don't want to re-train the network before evaluating
+    each fold, select the full training set associated with the number of folds you want to evaluate.
+    That way, none of the samples in the validation folds are seen by the network during training.
+    For evaluation, select the required number of days prior to the evaluation set to make predictions.
+    """
+    def __init__(self, sales_train_validation, train_size=-1, validation_size=28):
+        """If train_size=-1, all days prior to the validation set will be the training set."""
+        self.df = sales_train_validation
+        self.train_size = train_size
+        self.validation_size = validation_size
+        self.final_day = 1941  # select_final_day(sales_train_validation)
+
+    def get_train_val_split(self, fold=None, train_size=None):
+        """Get training and validation sets for specified validation fold."""
+        if train_size is None:
+            train_size = self.train_size
+
+        day_end = self.final_day - self.validation_size * fold
+        val_df = select_dates(self.df, day_end=day_end, num_days=self.validation_size,
+                              include_metadata=True)
+
+        if train_size == -1:
+            # select all days prior to validation set
+            train_df = select_dates(self.df, day_start=1, day_end=day_end - self.validation_size,
+                                    include_metadata=True)
+        else:
+            train_df = select_dates(self.df, num_days=train_size, day_end=day_end - self.validation_size,
+                                    include_metadata=True)
+
+        return train_df, val_df
+
 
 if __name__ == "__main__":
     os.environ['DATA_DIR'] = 'data/'
