@@ -114,7 +114,7 @@ def create_submission(sales_pred, submission_dir=None, filename=None, add_timest
     of sales predictions"""
 
     if submission_dir is None:
-        submission_dir = os.environ['SUBMISSION_DIR']
+        submission_dir = os.environ['SUB_DIR']
 
     # Drop meta-columns and rename columns to F1, ..., F28
     pred_val = sales_pred.drop(columns=['item_id', 'dept_id', 'cat_id', 'store_id', 'state_id'])
