@@ -82,6 +82,10 @@ class Referee(object):
         # Calculate scale: 1/(n-1) * sum (Yt - Y_t-1) ^ 2
         # agg level 3: 2.77 s ± 300 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
         # agg level 12: 3.91 s ± 921 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+        """As done with RMSSE, the denominator of SPL is computed only for the time-periods for which the examined
+        items/products are actively sold, i.e., the periods following the first non-zero demand observed for the
+        series under evaluation. 
+        """
         if groupby:
             Yt = self.sales_train.groupby(groupby).sum()
             Yt1 =Yt.shift(1, axis=1)
@@ -90,7 +94,11 @@ class Referee(object):
             Yt = self.sales_train[day_cols]
             Yt1 = Yt.shift(1, axis=1)
 
-        scale = ((Yt - Yt1) ** 2).sum(axis=1) / (self.n - 1)
+        # Calculate number of sales since fist sale for each product
+        first_sold_day = Yt.replace(0, np.nan).apply(lambda x: int(x.first_valid_index()[2:]), axis=1)
+        n = select_final_day(Yt) - first_sold_day  # list of numbers since first sale
+
+        scale = ((Yt - Yt1) ** 2).sum(axis=1) / (n - 1)
         return scale
 
     def evaluate(self, sales_pred):
