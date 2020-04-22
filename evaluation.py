@@ -194,6 +194,6 @@ def test_referee():
     # Timeit of evaluate: 301 ms ± 38 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
     print(metrics)
 
-
-os.environ['DATA_DIR'] = 'data/'
-test_referee()
+if __name__ == "__main__":
+    os.environ['DATA_DIR'] = 'data/'
+    test_referee()
