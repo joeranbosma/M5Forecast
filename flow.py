@@ -62,10 +62,18 @@ def select_dates(df, day_start=None, num_days=None, day_end=None, include_metada
     return df[d_list]
 
 
+def select_day_nums(df, as_int=True):
+    # Select columns with 'd_'
+    d_list = [col for col in df.columns if 'd_' in col]
+    # remove 'd_' and convert to int
+    if as_int:
+        d_list = [int(col[2:]) for col in d_list]
+    return d_list
+
+
 def select_final_day(df):
     """Select final day of DataFrame"""
-    # Select columns with 'd_', remove 'd_' and convert to int
-    d_list = [int(col[2:]) for col in df.columns if 'd_' in col]
+    d_list = select_day_nums(df)
     return max(d_list)
 
 

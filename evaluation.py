@@ -12,7 +12,7 @@ import pandas as pd
 from tqdm import tqdm as tqdm
 
 # own imports
-from flow import load_data, select_dates, sales_to_money, select_final_day
+from flow import load_data, select_dates, sales_to_money, select_final_day, select_day_nums
 
 
 def day_to_int(day, default=None):
@@ -246,6 +246,37 @@ class CrossValiDataGenerator:
         return train_df, val_df
 
 
+def test_cv_generator(verbose=True):
+    """Test the CrossValiDataGenerator"""
+    # Load data
+    calendar, sales_train_validation, sell_prices = load_data()
+
+    # Set up generator
+    cv_generator = CrossValiDataGenerator(sales_train_validation, train_size=28)
+    train, _ = cv_generator.get_train_val_split(fold=10, train_size=-1)
+
+    # Select train & test sets for ten folds
+    val_days_seen = []
+    for fold in range(1, 1 + 10):
+        train_df, val_df = cv_generator.get_train_val_split(fold=fold)
+        # select days of validation set
+        d_list = select_day_nums(val_df)
+        # assert none of these days were previously seen
+        for d in d_list:
+            assert (d not in val_days_seen), "Validation day already seen"
+
+        # add to list of seen days
+        val_days_seen.extend(d_list)
+
+    if verbose:
+        print("Validation days seen: ", val_days_seen)
+
+    # the final 28*10 days should have been seen, not including the public leaderboard
+    for d in range(1913-28*10+1, 1913+1):
+        assert d in val_days_seen, "Validation day {} should have been seen".format(d)
+
+
 if __name__ == "__main__":
     os.environ['DATA_DIR'] = 'data/'
     test_referee()
+    test_cv_generator()
