@@ -11,7 +11,7 @@ from tqdm import tqdm as tqdm
 import time
 
 
-def load_data(data_dir = None):
+def load_data(data_dir=None):
     if data_dir is None:
         data_dir = os.environ['DATA_DIR']
 
@@ -38,6 +38,17 @@ def load_data(data_dir = None):
         sell_prices[col] = sell_prices[col].astype('category')
 
     return calendar, sales_train_validation, sell_prices
+
+
+def get_empty_predictions(data_dir=None, with_eval_cols=False):
+    if data_dir is None:
+        data_dir = os.environ['DATA_DIR']
+
+    if with_eval_cols:
+        empty_pred = pd.read_csv(data_dir + '/empty_pred.csv', index_col='id')
+    else:
+        empty_pred = pd.read_csv(data_dir + '/pred_skeleton.csv', index_col='id')
+    return empty_pred
 
 
 def select_dates(df, day_start=None, num_days=None, day_end=None, include_metadata=False):
