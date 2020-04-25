@@ -208,6 +208,33 @@ def test_referee():
     print(metrics)
 
 
+class RapidReferee(object):
+    """Use same scale and weight for each evaluation"""
+    def __init__(self, sales_true, sales_train, prices, calendar, verbose=True):
+        # initialize a Referee
+        self.ref = Referee(sales_true, sales_train, prices, calendar, verbose=verbose)
+
+    def evaluate(self, sales_pred, sales_true=None):
+        # sales_true can be provided to update the true sales
+        if sales_true is not None:
+            self.ref.sales_true = sales_true
+
+        # we will alter the df, so copy it
+        sales_pred = sales_pred.copy()
+
+        # rewrite columns to match the Referee's columns
+        day_nums_pred = select_day_nums(sales_pred, as_int=False)
+        day_nums_true = select_day_nums(self.ref.sales_true, as_int=False)
+
+        pred_cols = list(sales_pred.columns)
+        for source_day, target_day in zip(day_nums_pred, day_nums_true):
+            idx = pred_cols.index(source_day)
+            pred_cols[idx] = target_day
+
+        sales_pred.columns = pred_cols
+        return self.ref.evaluate(sales_pred)
+
+
 class CrossValiDataGenerator:
     """
     Provide training and validation sets for cross-validation.

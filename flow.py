@@ -67,15 +67,17 @@ def select_dates(df, day_start=None, num_days=None, day_end=None, include_metada
 
     # include metadata
     if include_metadata:
-        d_list.extend(['item_id', 'dept_id', 'cat_id', 'store_id', 'state_id'])
+        meta_cols = ['item_id', 'dept_id', 'cat_id', 'store_id', 'state_id']
+        d_list.extend([col for col in meta_cols if col in df.columns])
 
     # select days from df and return
     return df[d_list]
 
 
-def select_day_nums(df, as_int=True):
+def select_day_nums(df, as_int=True, axis=1):
     # Select columns with 'd_'
-    d_list = [col for col in df.columns if 'd_' in col]
+    cols = df.columns if axis == 1 else df.index
+    d_list = [col for col in cols if 'd_' in col]
     # remove 'd_' and convert to int
     if as_int:
         d_list = [int(col[2:]) for col in d_list]
