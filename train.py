@@ -6,8 +6,12 @@ Created: 25 apr 2020
 """
 
 import numpy as np
+import matplotlib.pyplot as plt
+from IPython.display import clear_output
+from tensorflow.keras.callbacks import Callback
 
 from flow import select_day_nums
+from agent import AggregateAgent
 
 
 class BatchCreator(object):
@@ -129,3 +133,64 @@ class BatchCreator(object):
             self.on_epoch_end()
 
 
+class Logger(Callback):
+    def __init__(self, ref, cv_generator, train_norm, folds, inp_shape=280,
+                 preprocess=None, update_plot=True):
+        super().__init__()
+        self.ref = ref
+        self.cv_generator = cv_generator
+        self.train_norm = train_norm
+        self.folds = folds
+        self.inp_shape = inp_shape
+        self.preprocess = preprocess
+        self.update_plot = update_plot
+
+        self.losses = []
+        self.val_metrics = []
+        self.best_wrmsse = np.inf
+        self.best_model = None
+
+    def on_batch_end(self, batch, logs={}):
+        self.losses.append(logs.get('loss'))
+
+    def on_epoch_end(self, batch, logs={}):
+        mean_wrmsse, wrmsses = self.validate()
+        self.val_metrics.append([len(self.losses), mean_wrmsse])
+        if mean_wrmsse > self.best_wrmsse:
+            self.best_wrmsse = mean_wrmsse
+            self.best_model = self.model.get_weights()
+        if self.update_plot:
+            self.plot()
+
+    def validate(self):
+        ls = []
+
+        for fold in self.folds:
+            sales_train, sales_true = self.cv_generator.get_train_val_split(fold=fold, train_size=28)
+
+            sales_true_aggregated = sales_true.groupby(['store_id']).sum()
+            train_df, features, norm = self.preprocess(sales_train, norm=self.train_norm)
+
+            # select days to predict
+            val_day_nums = select_day_nums(sales_true_aggregated)
+            # setup agent with trained model
+            agent = AggregateAgent(model=self.model, train_norm=self.train_norm, inp_shape=self.inp_shape)
+
+            # predict
+            sales_pred = agent.predict(train_df, val_day_nums)
+
+            store_WRMSSE = self.ref.calc_WRMSSE(sales_true=sales_true_aggregated, sales_pred=sales_pred, level=3)
+            ls.append(store_WRMSSE)
+
+        return np.mean(ls), ls
+
+    def plot(self, clear=True):
+        if clear:
+            clear_output()
+
+        N = len(self.losses)
+        train_loss_plt, = plt.plot(range(0, N), self.losses)
+        val_plt, = plt.plot(*np.array(self.val_metrics).T)
+        plt.legend((train_loss_plt, val_plt),
+                   ('training loss', 'validation WRMSSE'))
+        plt.show()

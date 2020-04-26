@@ -81,3 +81,29 @@ class KDayMeanTimesWeeklyPattern(AgentBase):
 
         return pred
 
+
+class AggregateAgent(AgentBase):
+    """Agent to predict sales on aggregate level"""
+
+    def __init__(self, model, features, train_norm, inp_shape=280):
+        super().__init__()
+        self.model = model
+        self.features = features
+        self.train_norm = train_norm
+        self.inp_shape = inp_shape
+
+    def predict(self, train_df, val_day_nums):
+        # select date columns
+        inp_day_cols = ['d_%d' % (d - 28) for d in val_day_nums]
+        out_day_cols = ['d_%d' % d for d in val_day_nums]
+
+        # predict
+        X = np.array([train_df.loc[inp_day_cols, self.features].values.T.reshape(self.inp_shape)])
+        y = self.model.predict(X)
+
+        # reshape, set columns and indices, and de-normalise
+        y = pd.DataFrame(y.reshape(10, 28).T).T
+        y.columns, y.index = out_day_cols, train_df.columns
+        sales_pred = y * self.train_norm
+        return sales_pred
+
