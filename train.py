@@ -8,10 +8,12 @@ Created: 25 apr 2020
 import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
+
 from tensorflow.keras.callbacks import Callback
+import tensorflow.keras.backend as K
+import tensorflow as tf
 
 from flow import select_day_nums
-from agent import AggregateAgent
 
 
 class BatchCreator(object):
@@ -60,8 +62,8 @@ class BatchCreator(object):
 
         # calculate properties
         self.n = len(self.list_start_val_days)
-        self.n_features = len(features) * window_in
-        self.n_labels = len(labels) * window_out
+        self.n_features = len(features)
+        self.n_labels = len(labels)
 
     def __len__(self):
         """Denotes the number of batches per epoch"""
@@ -94,8 +96,8 @@ class BatchCreator(object):
 
         # create batch placeholders
         batch_size = len(list_start_val_days_temp)
-        x_batch = np.zeros(shape=(batch_size, self.n_features,))
-        y_batch = np.zeros(shape=(batch_size, self.n_labels))
+        x_batch = np.zeros(shape=(batch_size, self.window_in, self.n_features))
+        y_batch = np.zeros(shape=(batch_size, self.window_in, self.n_labels))
 
         # fill batch
         for i, start_val_day in enumerate(list_start_val_days_temp):
@@ -119,8 +121,8 @@ class BatchCreator(object):
 
             # print("Train idx: {}".format(inp_idx))
 
-            x_batch[i] = self.df.loc[inp_idx, self.features].values.T.reshape(self.n_features)
-            y_batch[i] = self.df.loc[val_idx, self.labels].values.T.reshape(self.n_labels)
+            x_batch[i] = self.df.loc[inp_idx, self.features].values
+            y_batch[i] = self.df.loc[val_idx, self.labels].values
 
         return x_batch, y_batch
 
@@ -134,16 +136,23 @@ class BatchCreator(object):
 
 
 class Logger(Callback):
-    def __init__(self, ref, cv_generator, train_norm, folds, inp_shape=280,
-                 preprocess=None, update_plot=True):
+    def __init__(self, ref, cv_generator, prices=None, calendar=None, train_norm=None, features=None, labels=None,
+                 agent=None, folds=None, window_in=28, preprocess_func=None, update_plot=True,
+                 plot_loss_max=None):
         super().__init__()
         self.ref = ref
         self.cv_generator = cv_generator
+        self.prices = prices
+        self.calendar = calendar
         self.train_norm = train_norm
+        self.features = features
+        self.labels = labels
         self.folds = folds
-        self.inp_shape = inp_shape
-        self.preprocess = preprocess
+        self.agent = agent
+        self.window_in = window_in
+        self.preprocess_func = preprocess_func
         self.update_plot = update_plot
+        self.plot_loss_max = plot_loss_max
 
         self.losses = []
         self.val_metrics = []
@@ -166,20 +175,18 @@ class Logger(Callback):
         ls = []
 
         for fold in self.folds:
-            sales_train, sales_true = self.cv_generator.get_train_val_split(fold=fold, train_size=28)
+            sales_train, sales_true = self.cv_generator.get_train_val_split(fold=fold, train_size=self.window_in)
 
             sales_true_aggregated = sales_true.groupby(['store_id']).sum()
-            train_df, features, norm = self.preprocess(sales_train, norm=self.train_norm)
+            train_df, norm = self.preprocess_func(sales_train, prices=self.prices,
+                                                  calendar=self.calendar, norm=self.train_norm)
 
             # select days to predict
             val_day_nums = select_day_nums(sales_true_aggregated)
-            # setup agent with trained model
-            agent = AggregateAgent(model=self.model, train_norm=self.train_norm, inp_shape=self.inp_shape)
+            sales_pred = self.agent.predict(train_df, val_day_nums)
 
-            # predict
-            sales_pred = agent.predict(train_df, val_day_nums)
-
-            store_WRMSSE = self.ref.calc_WRMSSE(sales_true=sales_true_aggregated, sales_pred=sales_pred, level=3)
+            store_WRMSSE = self.ref.calc_WRMSSE(sales_true=sales_true_aggregated, sales_pred=sales_pred.T,
+                                                groupby=None, weights=self.ref.weights[3], scale=self.ref.scales[3])
             ls.append(store_WRMSSE)
 
         return np.mean(ls), ls
@@ -191,6 +198,27 @@ class Logger(Callback):
         N = len(self.losses)
         train_loss_plt, = plt.plot(range(0, N), self.losses)
         val_plt, = plt.plot(*np.array(self.val_metrics).T)
+        if min(self.losses) < self.plot_loss_max:
+            plt.ylim(top=self.plot_loss_max, bottom=0)
         plt.legend((train_loss_plt, val_plt),
                    ('training loss', 'validation WRMSSE'))
         plt.show()
+
+
+def make_loss(ref, train_norm):
+    # calculate scaling constant for each series
+    scaling = ref.weights[3] * train_norm / (ref.scales[3] ** (1/2))
+    # convert to  array
+    scaling = tf.Variable(scaling.values, dtype=tf.float32)
+
+    def WRMSSE_store(y_true, y_pred):
+        # calculate squared prediction error
+        SE = K.square(y_pred - y_true)
+        # Calculate mean of daily prediction errors, so keep list of series
+        MSE = K.mean(SE, axis=0)
+        # apply scaling
+        scaled_MSE = MSE * scaling
+        # sum
+        return K.sum(scaled_MSE)
+    return WRMSSE_store
+
