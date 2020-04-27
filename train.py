@@ -62,7 +62,10 @@ class BatchCreator(object):
 
         # calculate properties
         self.n = len(self.list_start_val_days)
-        self.n_features = len(features)
+        if isinstance(features, dict):
+            self.n_features = {key: len(feats) for (key, feats) in features.items()}
+        else:
+            self.n_features = len(features)
         self.n_labels = len(labels)
 
     def __len__(self):
@@ -96,7 +99,12 @@ class BatchCreator(object):
 
         # create batch placeholders
         batch_size = len(list_start_val_days_temp)
-        x_batch = np.zeros(shape=(batch_size, self.window_in, self.n_features))
+        if isinstance(self.features, dict):
+            x_batch = {}
+            for key, feats in self.features.items():
+                x_batch[key] = np.zeros(shape=(batch_size, self.window_in, self.n_features[key]))
+        else:
+            x_batch = np.zeros(shape=(batch_size, self.window_in, self.n_features))
         y_batch = np.zeros(shape=(batch_size, self.window_in, self.n_labels))
 
         # fill batch
@@ -120,8 +128,11 @@ class BatchCreator(object):
             inp_idx = ['d_%d' % d for d in range(start_inp_day, final_inp_day + 1, self.dilation)]
 
             # print("Train idx: {}".format(inp_idx))
-
-            x_batch[i] = self.df.loc[inp_idx, self.features].values
+            if isinstance(self.features, dict):
+                for key, feats in self.features.items():
+                    x_batch[key][i] = self.df.loc[inp_idx, feats].values
+            else:
+                x_batch[i] = self.df.loc[inp_idx, self.features].values
             y_batch[i] = self.df.loc[val_idx, self.labels].values
 
         return x_batch, y_batch
