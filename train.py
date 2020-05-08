@@ -11,12 +11,13 @@ from IPython.display import clear_output
 
 from tensorflow.keras.callbacks import Callback
 import tensorflow.keras.backend as K
+from tensorflow.keras.utils import Sequence
 import tensorflow as tf
 
 from flow import select_day_nums
 
 
-class BatchCreator(object):
+class BatchCreator(Sequence):
     """Batch creator for M5Forecast - Accuracy challenge
     Expects a DataFrame with the days as index (d_num_start, .., d_num_end)
 
@@ -105,7 +106,7 @@ class BatchCreator(object):
                 x_batch[key] = np.zeros(shape=(batch_size, self.window_in, self.n_features[key]))
         else:
             x_batch = np.zeros(shape=(batch_size, self.window_in, self.n_features))
-        y_batch = np.zeros(shape=(batch_size, self.window_in, self.n_labels))
+        y_batch = np.zeros(shape=(batch_size, self.window_out, self.n_labels))
 
         # fill batch
         for i, start_val_day in enumerate(list_start_val_days_temp):
@@ -176,7 +177,7 @@ class Logger(Callback):
     def on_epoch_end(self, batch, logs={}):
         mean_wrmsse, wrmsses = self.validate()
         self.val_metrics.append([len(self.losses), mean_wrmsse])
-        if mean_wrmsse > self.best_wrmsse:
+        if mean_wrmsse < self.best_wrmsse:
             self.best_wrmsse = mean_wrmsse
             self.best_model = self.model.get_weights()
         if self.update_plot:
@@ -232,4 +233,3 @@ def make_loss(ref, train_norm):
         # sum
         return K.sum(scaled_MSE)
     return WRMSSE_store
-

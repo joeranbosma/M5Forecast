@@ -11,13 +11,11 @@ Created: 23 apr 2020
 """
 
 # basic imports
-import os
 import numpy as np
 import pandas as pd
-from tqdm import tqdm as tqdm
 
 # own imports
-from flow import load_data, select_dates, sales_to_money, select_final_day, select_day_nums, get_empty_predictions
+from flow import select_dates, select_final_day, select_day_nums, get_empty_predictions
 
 
 class AgentBase(object):
@@ -43,7 +41,6 @@ class KDayMeanTimesWeeklyPattern(AgentBase):
         for i in range(1, 1 + 7):
             # select days from a certain day of the week
             cols = list(self.calendar[self.calendar.wday == i].d.values)
-            col_name = self.calendar[self.calendar.wday == i].weekday.values[0]
             # filter days to match training set
             cols = [d for d in cols if d in sales_train.columns]
             col_list.append(cols)
@@ -84,8 +81,13 @@ class KDayMeanTimesWeeklyPattern(AgentBase):
 
 class AggregateAgent(AgentBase):
     """Agent to predict sales on aggregate level"""
+    # train_norm: float
+    # features: list or dict
+    # labels: list
+    # window_in: int
 
     def __init__(self, model, train_norm, features, labels, window_in=28):
+        super().__init__()
         self.model = model
         self.train_norm = train_norm
         self.features = features
@@ -112,4 +114,3 @@ class AggregateAgent(AgentBase):
         sales_pred = pd.DataFrame(y_pred * self.train_norm,
                                   index=out_day_idx, columns=self.labels)
         return sales_pred
-
