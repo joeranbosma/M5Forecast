@@ -6,3 +6,6 @@ data/
 data/
 .ipynb_checkpoints/
 submissions/
+.metadata/
+/custom_layer/.project
+/custom_layer/.pydevproject
