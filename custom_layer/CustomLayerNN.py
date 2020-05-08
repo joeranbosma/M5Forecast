@@ -20,8 +20,8 @@ import matplotlib.pyplot as plt
 
 # tensorflow imports
 from tensorflow.keras.layers import Input, Dense, Conv1D, MaxPooling1D, Reshape, Flatten
-# from tensorflow.keras.models import Model
-# from tensorflow.keras import backend as K
+from tensorflow.keras.models import Model
+from tensorflow.keras import backend as K
 
 class custom_layer_nn:
 
@@ -54,7 +54,7 @@ class custom_layer_nn:
 		x = Dense(64)(x)
 		x = Dense(2)(x)  # represents mu, sigma
 		
-		x = self.DistributionLayer(quantiles=quantiles)(x)  # returns 7 points, one for each quantile
+		#x = self.DistributionLayer(quantiles=quantiles)(x)  # returns 7 points, one for each quantile
 		out = x
 		
 		model = Model(inputs=inp, outputs=out)
@@ -77,7 +77,7 @@ class custom_layer_nn:
 	
 	# 4. Uses the trained model to perform a prediction/classification
 	def predict_output(self,train_df,target_df):
-		quantiles = [0.005, 0.025, 0.165, 0.25, 0.5, 0.75, 0.835, 0.975, 0.995]
+		
 		pass
 	
 	# 1.1 Converts smaples/weights x into the 7 x-coordinates representing the 7 quantiles
@@ -87,4 +87,9 @@ class custom_layer_nn:
 if __name__ == '__main__':
 	main= custom_layer_nn()
 	train_df, target_df = main.get_train_data()
+	
+	quantiles = [0.005, 0.025, 0.165, 0.25, 0.5, 0.75, 0.835, 0.975, 0.995]
+	inp_shape = [337,10]
+	model = main.get_model(inp_shape, quantiles)
+	print(f'model={model}')
 	print("done")
