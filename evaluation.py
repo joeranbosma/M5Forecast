@@ -22,10 +22,11 @@ def day_to_int(day, default=None):
         return default
 
 
-class Referee(object):
-    def __init__(self, sales_true, sales_train, prices, calendar, verbose=True):
+    def __init__(self, sales_true, sales_true_quantiles, sales_train, prices, calendar, verbose=True):
+        if verbose: print("Initializing Referee")
         self.sales_true = sales_true
         self.sales_train = sales_train
+        self.sales_true_quantiles = sales_true_quantiles
         self.h = sales_true.shape[1]
         self.n = sales_train.shape[1]
 
@@ -114,7 +115,7 @@ class Referee(object):
         scale = ((Yt - Yt1) ** 2).sum(axis=1) / (n - 1)
         return scale
 
-    def evaluate(self, sales_pred):
+    def evaluate_WRMSSE(self, sales_pred):
         """
         Evaluate the performance of the predicted sales. The predictions should provide an 28 day forecast for all
         3049 products of all 10 stores, so 30490x28 point forecasts. With these forecasts, the WRMSSE for each
@@ -179,6 +180,60 @@ class Referee(object):
         score = (((((true - pred) ** 2).mean(axis=1)).T / scale).T ** (1 / 2))
         score = (score * weights.T).T.sum().sum()
         return score
+    
+    def evaluate_SPL(self, quantiles_pred):
+        """Evaluate the Scaled Pinball Loss for a given set of predictions"""
+        metrics = {}
+        
+        # Calculate SPL for each level
+        for level, groupby in self.aggregation_levels.items():
+            # The groupby, weights and scale will be selected using the level
+            metrics[level] = self.calc_SPL(quantiles_pred, level=level,groupby=groupby)
+            
+        SPL = np.mean(list(metrics.values()))  # or sum and divide by self.K, take average over all aggregation levels
+        metrics['SPL'] = SPL
+        return metrics
+    
+    def calc_SPL(self, quantiles_pred, level=None, groupby=None, weights=None, scale=None):
+        """Calculate the Scaled Pinball Loss for a given aggregation level"""
+        
+        if level:
+            if groupby is None: groupby = self.aggregation_levels[level]
+            if weights is None: weights = self.weights[level]
+            if scale is None: scale = self.scales[level]
+        assert weights is not None, "Provide level or weights"
+        assert scale is not None, "Provide level or scale"
+
+        # Select the correct predictions and true sales based on the input level
+        predictions = quantiles_pred[quantiles_pred['level']==str(level)]
+        true_sales = self.sales_true_quantiles[self.sales_true_quantiles['level']==str(level)]
+        
+        # Make sure that both the predictions and the true sales have the same
+        # id list, otherwise our calculation will go wrong
+        predictions = predictions.sort_values('id')
+        true_sales = true_sales.sort_values('id')
+
+        # Convert to numpy array
+        predictions = predictions.to_numpy()[:,1:29]
+        true_sales = true_sales.to_numpy()[:,1:29]
+        
+        # Error
+        err = true_sales-predictions
+
+        # Number of rows
+        Nlevel = predictions.shape[0]
+
+        # Dummy array to save losses in
+        losses = np.zeros(Nlevel//9)
+        for i in range(Nlevel//9):
+            indices = np.arange(i*9,(i+1)*9) # per set of 9, take indices
+            subset = err[indices] # Take subset out of real set
+            res = np.mean(np.sum(np.amax(np.array([self.quantiles * subset.T, (self.quantiles - 1) * subset.T]),axis=0),axis=0)) #compute PL of set
+            losses[i] = res # Save resulting PL
+
+        loss = np.sum(np.array(losses*self.weights[level])/np.array(self.h*self.scales[level])) # Calculate SPL of aggregate level
+        
+        return loss
 
 
 def test_referee():
