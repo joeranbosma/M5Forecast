@@ -22,13 +22,63 @@ def day_to_int(day, default=None):
         return default
 
 
-    def __init__(self, sales_true, sales_true_quantiles, sales_train, prices, calendar, verbose=True):
+def convert_true_sales_to_quantiles(sales_true, aggregation_levels, verbose=1):
+    sales_true = sales_true.copy()
+
+    # Quantiles
+    quantiles = [0.005, 0.025, 0.165, 0.250, 0.500, 0.750,0.835, 0.975, 0.995]
+    d_cols = select_day_nums(sales_true, as_int=False)
+
+    sales_true_quantiles = pd.DataFrame()
+    iterator = aggregation_levels.items()
+    if verbose == 1:
+        print("Converting true sales to quantile form")
+    elif verbose == 2:
+        iterator = tqdm(iterator, desc="True sales to quantiles")
+    for level, groupby in iterator:
+        if level == 12:
+            groupby = ['store_id', 'item_id']
+        group = sales_true.groupby(groupby).sum()
+
+        group_ = pd.DataFrame()
+        for quantile in quantiles:
+            g_ = group.copy()
+            vals = g_.index.values
+            if level == 1:
+                ids = ['Total_X_' + str(quantile)  + '_validation' for val in vals]
+            if level in [2, 3, 4, 5, 10]:
+                ids = [val + '_X_' + str(quantile) + '_validation' for val in vals]
+            if level in[6, 7, 8, 9]:
+                ids = [val[0] + '_' + val[1] + '_' + str(quantile) + '_validation' for val in vals]
+            if level in [11, 12]:
+                ids = [val[1] + '_' + val[0] + '_' + str(quantile) + '_validation' for val in vals]
+
+            g_['quantile'] = quantile
+            g_['level'] = level
+            g_['id'] = ids
+
+            group_ = group_.append(g_)
+
+        sales_true_quantiles = sales_true_quantiles.append(group_)
+
+    # convert quantiles to float
+    conv_dict = {d_col: 'float64' for d_col in d_cols}
+    sales_true_quantiles = sales_true_quantiles.astype(conv_dict)
+    sales_true_quantiles.columns = ['F%d' % int(i+1) if x =='d_1' + str(i+886) else x
+                                    for i, x in enumerate(sales_true_quantiles.columns)]
+
+    return sales_true_quantiles
+
+
+class Referee(object):
+    def __init__(self, sales_true, sales_train, prices, calendar, verbose=True):
         if verbose: print("Initializing Referee")
         self.sales_true = sales_true
         self.sales_train = sales_train
-        self.sales_true_quantiles = sales_true_quantiles
         self.h = sales_true.shape[1]
         self.n = sales_train.shape[1]
+
+        self.quantiles = np.array([0.005, 0.025, 0.165, 0.250, 0.500, 0.750, 0.835, 0.975, 0.995])
 
         # Define aggregation levels as their Pandas groupby
         # Follow same order as https://github.com/Mcompetitions/M5-methods/blob/master/validation/Point%20Forecasts%20-%20Benchmarks.R
@@ -44,8 +94,10 @@ def day_to_int(day, default=None):
             9: ['store_id', 'dept_id'],  # per store & dep: 70
             10: ['item_id'],  # per item, across stores/states: 3049
             11: ['item_id', 'state_id'],  # per item, across stores: 9,225
-            12: None  # lowest level, per product, per store
+            12: ['store_id', 'item_id']  # lowest level, per product, per store
         }
+
+        self.sales_true_quantiles = convert_true_sales_to_quantiles(sales_true, self.aggregation_levels)
 
         # Set number of aggregation levels
         self.K = len(self.aggregation_levels)  # 12 for full evaluation
@@ -72,9 +124,12 @@ def day_to_int(day, default=None):
 
         # Calculate scale of each level
         if verbose: print("Calculating scale for each level...")
-        self.scales = {}
+        self.scales_WSPL = {}
+        self.scales_WRMSSE = {}
         for level, groupby in self.aggregation_levels.items():
-            self.scales[level] = self.calc_scale(groupby=groupby)
+            scale_WSPL, scale_WRMSSE = self.calc_scale(groupby=groupby)
+            self.scales_WSPL[level] = scale_WSPL
+            self.scales_WRMSSE[level] = scale_WRMSSE
 
         if verbose: print("Finished setup.")
 
@@ -101,19 +156,20 @@ def day_to_int(day, default=None):
         """
         if groupby:
             Yt = self.sales_train.groupby(groupby).sum()
-            Yt1 =Yt.shift(1, axis=1)
         else:
             day_cols = self.sales_train.filter(regex='d_').columns
             Yt = self.sales_train[day_cols]
-            Yt1 = Yt.shift(1, axis=1)
+        Yt1 = Yt.shift(1, axis=1)
 
         # Calculate number of sales since fist sale for each product (default is required when unit is not sold in
         # training period, which also makes its weight zero.)
         first_sold_day = Yt.replace(0, np.nan).apply(lambda x: day_to_int(x.first_valid_index(), default=-1), axis=1)
         n = select_final_day(Yt) - first_sold_day  # list of numbers since first sale
 
-        scale = ((Yt - Yt1) ** 2).sum(axis=1) / (n - 1)
-        return scale
+        # Calculate scales for WSPL / WRMSSE loss
+        scale_WSPL = (np.abs(Yt - Yt1).sum(axis=1) / (n - 1))
+        scale_WRMSSE = ((Yt - Yt1) ** 2).sum(axis=1) / (n - 1)
+        return scale_WSPL, scale_WRMSSE
 
     def evaluate_WRMSSE(self, sales_pred):
         """
@@ -134,6 +190,8 @@ def day_to_int(day, default=None):
         return metrics
 
     def calc_WRMSSE(self, sales_true, sales_pred, level=None, groupby=None, weights=None, scale=None):
+        assert level is not 12, "Check if changing agg level groupby from None to ['store_id', 'item_id'] breaks this calculation"
+        
         """Calculate weighed root mean squared scaled error.
         Step by step:
 
@@ -162,7 +220,7 @@ def day_to_int(day, default=None):
         if level:
             if groupby is None: groupby = self.aggregation_levels[level]
             if weights is None: weights = self.weights[level]
-            if scale is None: scale = self.scales[level]
+            if scale is None: scale = self.scales_WRMSSE[level]
         assert weights is not None, "Provide level or weights"
         assert scale is not None, "Provide level or scale"
 
@@ -180,34 +238,37 @@ def day_to_int(day, default=None):
         score = (((((true - pred) ** 2).mean(axis=1)).T / scale).T ** (1 / 2))
         score = (score * weights.T).T.sum().sum()
         return score
-    
+
     def evaluate_SPL(self, quantiles_pred):
         """Evaluate the Scaled Pinball Loss for a given set of predictions"""
         metrics = {}
-        
+
+        # Determine predicted levels
+        predicted_levels = quantiles_pred.level.unique()
+
         # Calculate SPL for each level
         for level, groupby in self.aggregation_levels.items():
-            # The groupby, weights and scale will be selected using the level
-            metrics[level] = self.calc_SPL(quantiles_pred, level=level,groupby=groupby)
-            
+            if level in predicted_levels:
+                # The groupby, weights and scale will be selected using the level
+                metrics[level] = self.calc_SPL(quantiles_pred, level=level, groupby=groupby)
+
         SPL = np.mean(list(metrics.values()))  # or sum and divide by self.K, take average over all aggregation levels
-        metrics['SPL'] = SPL
+        metrics['WSPL'] = SPL
         return metrics
-    
+
     def calc_SPL(self, quantiles_pred, level=None, groupby=None, weights=None, scale=None):
         """Calculate the Scaled Pinball Loss for a given aggregation level"""
-        
         if level:
             if groupby is None: groupby = self.aggregation_levels[level]
             if weights is None: weights = self.weights[level]
-            if scale is None: scale = self.scales[level]
+            if scale is None: scale = self.scales_WSPL[level]
         assert weights is not None, "Provide level or weights"
         assert scale is not None, "Provide level or scale"
 
         # Select the correct predictions and true sales based on the input level
-        predictions = quantiles_pred[quantiles_pred['level']==str(level)]
-        true_sales = self.sales_true_quantiles[self.sales_true_quantiles['level']==str(level)]
-        
+        predictions = quantiles_pred[quantiles_pred['level'] == level]
+        true_sales = self.sales_true_quantiles[self.sales_true_quantiles['level'] == level]
+
         # Make sure that both the predictions and the true sales have the same
         # id list, otherwise our calculation will go wrong
         predictions = predictions.sort_values('id')
@@ -216,25 +277,24 @@ def day_to_int(day, default=None):
         # Convert to numpy array
         predictions = predictions.to_numpy()[:,1:29]
         true_sales = true_sales.to_numpy()[:,1:29]
-        
+
         # Error
-        err = true_sales-predictions
+        err = true_sales - predictions
 
         # Number of rows
         Nlevel = predictions.shape[0]
 
         # Dummy array to save losses in
-        losses = np.zeros(Nlevel//9)
-        for i in range(Nlevel//9):
+        losses = np.zeros(Nlevel // 9)
+        for i in range(Nlevel // 9):
             indices = np.arange(i*9,(i+1)*9) # per set of 9, take indices
             subset = err[indices] # Take subset out of real set
             res = np.mean(np.sum(np.amax(np.array([self.quantiles * subset.T, (self.quantiles - 1) * subset.T]),axis=0),axis=0)) #compute PL of set
             losses[i] = res # Save resulting PL
 
-        loss = np.sum(np.array(losses*self.weights[level])/np.array(self.h*self.scales[level])) # Calculate SPL of aggregate level
-        
-        return loss
+        loss = np.sum(np.array(losses * weights)/np.array(self.h*scale)) # Calculate SPL of aggregate level
 
+        return loss
 
 def test_referee():
     """Test the Referee evaluation"""
