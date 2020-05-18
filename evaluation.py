@@ -22,7 +22,7 @@ def day_to_int(day, default=None):
         return default
 
 
-def convert_true_sales_to_quantiles(sales_true, aggregation_levels, verbose=1):
+def convert_true_sales_to_quantiles(sales_true, aggregation_levels, postfix='_evaluation', verbose=1):
     sales_true = sales_true.copy()
 
     # Quantiles
@@ -36,22 +36,26 @@ def convert_true_sales_to_quantiles(sales_true, aggregation_levels, verbose=1):
     elif verbose == 2:
         iterator = tqdm(iterator, desc="True sales to quantiles")
     for level, groupby in iterator:
-        if level == 12:
-            groupby = ['store_id', 'item_id']
-        group = sales_true.groupby(groupby).sum()
+        if groupby:
+            group = sales_true.groupby(groupby).sum()
+        else:
+            d_cols = select_day_nums(sales_true, as_int=False)
+            group = sales_true[d_cols]
 
         group_ = pd.DataFrame()
         for quantile in quantiles:
             g_ = group.copy()
             vals = g_.index.values
             if level == 1:
-                ids = ['Total_X_' + str(quantile)  + '_validation' for val in vals]
+                ids = ["Total_X_{:.3f}".format(quantile) + postfix for val in vals]
             if level in [2, 3, 4, 5, 10]:
-                ids = [val + '_X_' + str(quantile) + '_validation' for val in vals]
-            if level in[6, 7, 8, 9]:
-                ids = [val[0] + '_' + val[1] + '_' + str(quantile) + '_validation' for val in vals]
-            if level in [11, 12]:
-                ids = [val[1] + '_' + val[0] + '_' + str(quantile) + '_validation' for val in vals]
+                ids = [val + "_X_{:.3f}".format(quantile) + postfix for val in vals]
+            if level in [6, 7, 8, 9]:
+                ids = [val[0] + '_' + val[1] + "_{:.3f}".format(quantile) + postfix for val in vals]
+            if level == 11:
+                ids = [val[1] + '_' + val[0] + "_{:.3f}".format(quantile) + postfix for val in vals]
+            if level == 12:
+                ids = [val.replace('_validation', '') + "_{:.3f}".format(quantile) + postfix for val in vals]
 
             g_['quantile'] = quantile
             g_['level'] = level
@@ -64,8 +68,8 @@ def convert_true_sales_to_quantiles(sales_true, aggregation_levels, verbose=1):
     # convert quantiles to float
     conv_dict = {d_col: 'float64' for d_col in d_cols}
     sales_true_quantiles = sales_true_quantiles.astype(conv_dict)
-    sales_true_quantiles.columns = ['F%d' % int(i+1) if x =='d_1' + str(i+886) else x
-                                    for i, x in enumerate(sales_true_quantiles.columns)]
+    # sales_true_quantiles.columns = ['F%d' % int(i+1) if x =='d_1' + str(i+886) else x
+    #                                 for i, x in enumerate(sales_true_quantiles.columns)]
 
     return sales_true_quantiles
 
@@ -94,7 +98,7 @@ class Referee(object):
             9: ['store_id', 'dept_id'],  # per store & dep: 70
             10: ['item_id'],  # per item, across stores/states: 3049
             11: ['item_id', 'state_id'],  # per item, across stores: 9,225
-            12: ['store_id', 'item_id']  # lowest level, per product, per store
+            12: None  # lowest level, per product, per store
         }
 
         self.sales_true_quantiles = convert_true_sales_to_quantiles(sales_true, self.aggregation_levels)
@@ -147,7 +151,8 @@ class Referee(object):
         return weights
 
     def calc_scale(self, groupby=None):
-        # Calculate scale: 1/(n-1) * sum (Yt - Y_t-1) ^ 2
+        # Calculate RWMSSE scale: 1/(n-1) * sum (Yt - Y_t-1) ^ 2
+        # Calculate WSPL scale: 1/(n-1) * sum |Yt - Y_t-1|
         # agg level 3: 2.77 s ± 300 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
         # agg level 12: 3.91 s ± 921 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
         """As done with RMSSE, the denominator of SPL is computed only for the time-periods for which the examined
@@ -191,7 +196,7 @@ class Referee(object):
 
     def calc_WRMSSE(self, sales_true, sales_pred, level=None, groupby=None, weights=None, scale=None):
         assert level is not 12, "Check if changing agg level groupby from None to ['store_id', 'item_id'] breaks this calculation"
-        
+
         """Calculate weighed root mean squared scaled error.
         Step by step:
 
@@ -239,7 +244,7 @@ class Referee(object):
         score = (score * weights.T).T.sum().sum()
         return score
 
-    def evaluate_SPL(self, quantiles_pred):
+    def evaluate_WSPL(self, quantiles_pred):
         """Evaluate the Scaled Pinball Loss for a given set of predictions"""
         metrics = {}
 
@@ -252,8 +257,8 @@ class Referee(object):
                 # The groupby, weights and scale will be selected using the level
                 metrics[level] = self.calc_SPL(quantiles_pred, level=level, groupby=groupby)
 
-        SPL = np.mean(list(metrics.values()))  # or sum and divide by self.K, take average over all aggregation levels
-        metrics['WSPL'] = SPL
+        WSPL = np.mean(list(metrics.values()))  # or sum and divide by self.K, take average over all aggregation levels
+        metrics['WSPL'] = WSPL
         return metrics
 
     def calc_SPL(self, quantiles_pred, level=None, groupby=None, weights=None, scale=None):
@@ -329,7 +334,10 @@ class RapidReferee(object):
         # initialize a Referee
         self.ref = Referee(sales_true, sales_train, prices, calendar, verbose=verbose)
 
-    def evaluate(self, sales_pred, sales_true=None):
+    def evaluate(self, sales_pred, sales_true=None, mode='WSPL'):
+        """Evaluate performance without re-calculating weights and scales
+        mode can be either 'WSPL' or 'WRMSSE'.
+        """
         # sales_true can be provided to update the true sales
         if sales_true is not None:
             self.ref.sales_true = sales_true
@@ -347,7 +355,10 @@ class RapidReferee(object):
             pred_cols[idx] = target_day
 
         sales_pred.columns = pred_cols
-        return self.ref.evaluate(sales_pred)
+        if mode == 'WSPL':
+            return self.ref.evaluate_WSPL(sales_pred)
+        elif mode == 'WRMSSE':
+            return self.ref.evaluate_WRMSSE(sales_pred)
 
 
 class CrossValiDataGenerator:
