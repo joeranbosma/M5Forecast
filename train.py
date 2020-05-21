@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
+import time
 
 from tensorflow.keras.callbacks import Callback
 import tensorflow.keras.backend as K
@@ -241,6 +242,119 @@ class BatchCreator(Sequence):
 
 
 class Logger(Callback):
+    def __init__(self, val_batch_creator, model_dir=None, model_name="model", update_plot=True):
+        super().__init__()
+        self.val_batch_creator = val_batch_creator
+        self.update_plot = update_plot
+
+        # validation metrics
+        self.val_x = []
+        self.val_spl = []
+        # save best model properties
+        self.best_spl = np.inf
+        self.best_model = None
+        self.best_epoch = 0
+        self.model_dir = model_dir
+        self.model_name = model_name
+
+        # initialize metrics
+        self.train_metrics = {}
+        self.metric_names = ['loss']
+        self.metric_names.extend(['q{}_loss'.format(d) for d in range(9)])
+        for m in self.metric_names:
+            self.train_metrics[m] = []
+        print("Tracking {}".format(self.metric_names))
+
+        self.val_metrics = {}
+        self.val_metric_names = ['val_{}'.format(m) for m in self.metric_names]
+        for m in self.val_metric_names:
+            self.val_metrics[m] = []
+        print("Tracking {}".format(self.val_metric_names))
+
+    def on_batch_end(self, batch, logs={}):
+        # log training metrics
+        for m in self.metric_names:
+            if m in logs.keys():
+                self.train_metrics[m].append(logs.get(m))
+
+    def on_epoch_end(self, batch, logs={}):
+        num_train_steps = len(self.train_metrics['loss'])
+        timestamp = time.strftime('%Y-%m-%d_%H%M', time.localtime())
+
+        if self.model_dir:
+            self.model.save(self.model_dir + '{}_{}_{}_steps.h5'.format(
+                self.model_name, timestamp, num_train_steps))
+
+        # calculate normalised validation PL
+        if 'val_loss' in logs.keys():
+            for m in self.val_metric_names:
+                self.val_metrics[m].append(logs.get(m))
+        else:
+            # evaluate validation set
+            val_losses = self.model.evaluate(self.val_batch_creator.flow(),
+                                             steps=self.val_batch_creator.__len__())
+            for i, m in self.val_metric_names:
+                self.val_metrics[m] = val_losses[i]
+
+        self.val_x.append(num_train_steps)
+        spl = self.val_metrics['val_loss'][-1]
+
+        if spl < self.best_spl:
+            self.best_spl = spl
+            self.best_model = self.model.get_weights()
+            self.best_epoch = len(self.val_spl)
+        if self.update_plot:
+            self.plot()
+
+    def validate(self):
+        pass
+
+    # first try: 7.687106850995075/0.0018890968224565899
+    def plot(self, experimental_pinball_boost=3.671080060420607 / 0.03552745282649994, clear=True):
+        if clear:
+            clear_output()
+
+        f, axes2d = plt.subplots(2, 2, figsize=(18, 12))
+
+        # plot losses
+        losses = self.train_metrics['loss']
+        val_losses = self.val_metrics['val_loss']
+
+        for i, axes in enumerate(axes2d):
+            if i == 1:
+                # experimental: convert normalised PL -> WSPL
+                losses = np.array(losses) * experimental_pinball_boost
+                val_losses = np.array(val_losses) * experimental_pinball_boost
+
+            ax = axes[0]
+            ax.plot(range(1, 1 + len(losses)), losses, label='Train')
+            if len(val_losses):
+                ax.plot(self.val_x, val_losses, '.-', label='Validation')
+            ax.set_xlabel("Step")
+            ax.set_ylabel(r"normalised PL")
+            ax.set_title("Loss")
+            ax.set_ylim(0)
+
+            # plot final losses
+            ax = axes[1]
+            N = len(losses)
+            n = min(501, max(100, N - 100))
+            ax.plot(range(1 + N - n, 1 + N), losses[-n:], label='Train')
+            if len(val_losses):
+                indexer = [x > (N - n) for x in self.val_x]
+                ax.plot(np.array(self.val_x)[indexer], np.array(val_losses)[indexer], '.-', label='Validation')
+            ax.set_xlabel("Step")
+            ax.set_ylabel(r"normalised PL")
+            ax.set_title("Loss final {} steps".format(n))
+            ax.set_ylim(0)
+
+            for ax in axes:
+                ax.legend()
+
+        plt.show()
+
+
+class WindowLogger(Callback):
     def __init__(self, ref, cv_generator, prices=None, calendar=None, train_norm=None, features=None, labels=None,
                  agent=None, folds=None, window_in=28, preprocess_func=None, update_plot=True,
                  plot_loss_max=None):
