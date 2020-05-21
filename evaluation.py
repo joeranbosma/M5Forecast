@@ -280,8 +280,9 @@ class Referee(object):
         true_sales = true_sales.sort_values('id')
 
         # Convert to numpy array
-        predictions = predictions.to_numpy()[:,1:29]
-        true_sales = true_sales.to_numpy()[:,1:29]
+        d_cols = select_day_nums(predictions, as_int=False)
+        predictions = predictions[d_cols].values
+        true_sales = true_sales[d_cols].values
 
         # Error
         err = true_sales - predictions
