@@ -219,7 +219,14 @@ class BatchCreator(Sequence):
         # fill features
         x_batch = self.df.loc[list_IDs_temp, self.features]
         x_batch = pd.get_dummies(x_batch, columns=self.categorical_features)  # , dummy_na=True)
-        x_batch = x_batch.replace(np.nan, 0)
+
+        # convert to floats
+        x_batch = x_batch.astype(np.float32)
+        # replace nan with zero
+        mask = x_batch.isna()
+        x_batch[mask] = 0
+
+        # convert to numpy array and return
         x_batch = x_batch.values
 
         return x_batch, y_batch

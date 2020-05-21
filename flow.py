@@ -167,7 +167,7 @@ def model_predict(model, val_batch_creator):
 
     # match prediction with id's and stuff
     df = val_batch_creator.df[['id', 'date', 'demand']].copy()
-    for i in range(y_pred.shape[0]):
+    for i in range(len(y_pred)):
         df['pred_q{}'.format(i)] = y_pred[i].squeeze()
     return df
 
