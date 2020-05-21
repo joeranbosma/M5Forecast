@@ -6,9 +6,12 @@ Created: 18 apr 2020
 """
 
 import os
+import numpy as np
 import pandas as pd
 from tqdm import tqdm as tqdm
 import time
+import matplotlib.pyplot as plt
+from lightgbm_kernel import reduce_mem_usage
 
 
 def load_data(data_dir=None):
@@ -157,3 +160,150 @@ def create_submission(sales_pred, submission_dir=None, filename=None, add_timest
         timestamp = time.strftime('%Y-%m-%d_%H%M', time.localtime())
         sub.to_csv(submission_dir + "submission_{}.csv".format(timestamp))
 
+
+def model_predict(model, val_batch_creator):
+    # predict
+    y_pred = model.predict(val_batch_creator)
+
+    # match prediction with id's and stuff
+    df = val_batch_creator.df[['id', 'date', 'demand']].copy()
+    for i in range(y_pred.shape[0]):
+        df['pred_q{}'.format(i)] = y_pred[i].squeeze()
+    return df
+
+
+def denorm_preds(df, data_dir, level=9, verbose=True):
+    if verbose: print("Denormalising...")
+    norm = pd.read_csv(data_dir + 'prep/norm_level_{}.csv'.format(level), index_col='id')
+    df = df.copy()
+    pred_cols = [col for col in df.columns if ('pred_' in col or 'demand' in col)]
+    df[pred_cols] = df.apply(lambda row: row[pred_cols] * norm.loc[row.id].norm, axis=1)
+    return df
+
+
+def warp_preds_to_ref_form(df, calendar, quantiles):
+    # Intitialize magic warp
+    pred_cols = ['pred_q%d' % d for d in range(9)]
+    df = df.melt(id_vars=['id', 'date'], value_vars=pred_cols, var_name="quantile", value_name="prediction")
+
+    # map 'pred_q0' --> '0.005', etc.
+    quantile_map = {'pred_q%d' % d: "{:.3f}".format(q) for (d, q) in enumerate(quantiles)}
+
+    # Prepare magic
+    df['id_q'] = df['id'] + '|' + df['quantile']
+    df = df.pivot(index='id_q', columns='date', values='prediction')
+    df = df.reset_index()
+
+    # Perform magic
+    df['id'] = df.apply(lambda row: row.id_q.split('|')[0], axis=1)
+    df['quantile'] = df.apply(lambda row: quantile_map[row.id_q.split('|')[1]], axis=1)
+    df = df.drop(columns=['id_q'])
+    df['level'] = 9
+    df['id'] = df['id'] + '_' + df['quantile'] + '_evaluation'
+    df['quantile'] = df['quantile'].astype(float)
+
+    # Finalise magic
+    cols = [calendar.loc[col].d if isinstance(col, pd.Timestamp) else col for col in df.columns]
+    df.columns = cols
+    d_cols = select_day_nums(df, as_int=False)
+    df[d_cols] = df[d_cols].astype(float)
+    return df
+
+
+def plot_some(pred_df, ref, q=0.500):
+    d_cols = select_day_nums(pred_df, as_int=False)
+    # select true sales
+    real_sales = ref.sales_true_quantiles.loc[
+        (ref.sales_true_quantiles.level == 9) & (ref.sales_true_quantiles['quantile'] == q),
+        d_cols]
+
+    # select predicted sales
+    df = pred_df[pred_df['quantile'] == q]
+
+    # plot
+    f, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+    for i, ax in enumerate(np.ravel(axes)):
+        real_sales.iloc[i].T.plot(ax=ax, label="True")
+        df.iloc[i][d_cols].plot(ax=ax, label="Pred")
+        ax.legend()
+        ax.set_title(df.iloc[i].id)
+        ax.set_ylabel("Sales")
+
+
+def evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir, level):
+    # calculate model predictions
+    df = model_predict(model, val_batch_creator)
+
+    # denormalise model predictions
+    df = denorm_preds(df, data_dir=data_dir, level=level)
+
+    # perform absolute magic
+    df = warp_preds_to_ref_form(df, calendar=calendar, quantiles=quantiles)
+
+    # calculate (and display) WSPL
+    metrics = ref.evaluate_WSPL(df)
+    print(metrics)
+
+    # preview some predictions
+    plot_some(df, ref)
+
+    return metrics, df
+
+
+def restore_tags_converted_sales(df, level):
+    if level == 1:
+        # completely aggregated
+        pass
+    if level in [2, 3, 6, 7, 8, 9, 11]:
+        # restore state id from start
+        df['state_id'] = df.apply(lambda row: row.id.split('_')[0], axis=1)
+    if level in [3, 8, 9]:
+        # restore store from start
+        df['store_id'] = df.apply(lambda row: "_".join(row.id.split('_')[0:2]), axis=1)
+    if level in [4, 5, 10, 12]:
+        # restore category from start
+        df['cat_id'] = df.apply(lambda row: row.id.split('_')[0], axis=1)
+    if level in [5, 10, 12]:
+        # restore department from start
+        df['dept_id'] = df.apply(lambda row: "_".join(row.id.split('_')[0:2]), axis=1)
+    if level in [6, 7, 11]:
+        # restore category from second position
+        df['cat_id'] = df.apply(lambda row: row.id.split('_')[1], axis=1)
+    if level in [7, 11]:
+        # restore department from second position
+        df['dept_id'] = df.apply(lambda row: "_".join(row.id.split('_')[1:3]), axis=1)
+    if level in [8, 9]:
+        # restore department from third position
+        df['dept_id'] = df.apply(lambda row: "_".join(row.id.split('_')[2:4]), axis=1)
+    if level in [9]:
+        # restore category from third position
+        df['cat_id'] = df.apply(lambda row: row.id.split('_')[2], axis=1)
+    if level in [10, 12]:
+        # restore item id from start
+        df['item_id'] = df.apply(lambda row: "_".join(row.id.split('_')[0:3]), axis=1)
+    if level in [11]:
+        # restore item id from second position
+        df['item_id'] = df.apply(lambda row: "_".join(row.id.split('_')[1:4]), axis=1)
+    if level in [12]:
+        # restore state id from third position
+        df['state_id'] = df.apply(lambda row: row.id.split('_')[3], axis=1)
+    if level in [12]:
+        # restore store from third position
+        df['store_id'] = df.apply(lambda row: "_".join(row.id.split('_')[3:5]), axis=1)
+    return df
+
+
+def read_converted_sales(level, data_dir):
+    # read converted sales
+    converted_sales = pd.read_csv(data_dir + 'prep/converted_sales_level_{}.csv'.format(level), index_col=0)
+    converted_sales = converted_sales.T
+
+    # set index as column with name 'id'
+    converted_sales.index.name = 'id'
+    converted_sales = converted_sales.reset_index()
+
+    # restore item_id/store_id/etc from the id
+    restore_tags_converted_sales(converted_sales, level)
+
+    return reduce_mem_usage(converted_sales)

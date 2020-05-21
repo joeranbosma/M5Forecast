@@ -6,6 +6,7 @@ Created: 25 apr 2020
 """
 
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 
@@ -17,7 +18,7 @@ import tensorflow as tf
 from flow import select_day_nums
 
 
-class BatchCreator(Sequence):
+class WindowBatchCreator(Sequence):
     """Batch creator for M5Forecast - Accuracy challenge
     Expects a DataFrame with the days as index (d_num_start, .., d_num_end)
 
@@ -144,6 +145,98 @@ class BatchCreator(Sequence):
             for index in range(self.__len__()):
                 batch_x, batch_y = self.__getitem__(index)
                 yield batch_x, batch_y
+            self.on_epoch_end()
+
+
+class BatchCreator(Sequence):
+    """Batch creator for M5 Uncertainty challenge.
+    - batch_size: number of samples per batch. Note: if ensure_all_samples is True,
+                  the final batch size may be smaller.
+    - shuffle: whether to shuffle the samples.
+    - ensure_all_samples: whether to ensure all samples are yielded. If False (default),
+                          the batch size is always constant.
+    - inp_shape: input shape of how a single sample enters the neural network. This is without the batch size.
+    - categorical_features: which columns to convert to one-hot encoding
+    """
+
+    def __init__(self, df, features, labels, batch_size=128, shuffle=True, ensure_all_samples=False,
+                 inp_shape=(3244,), out_shape=(9,), categorical_features=None):
+        """Initialization"""
+        # Save settings
+        self.df = df
+        self.list_IDs = self.df.index
+        self.features = features
+        self.labels = labels
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.ensure_all_samples = ensure_all_samples
+        self.inp_shape = inp_shape
+        self.out_shape = out_shape
+        self.categorical_features = [c for c in categorical_features
+                                     if c in features]
+
+        # initialize indices
+        self.indexes = None
+        self.on_epoch_end()
+
+        # calculate properties
+        self.n = self.df.index.size
+
+    def __len__(self):
+        """Denotes the number of batches per epoch"""
+        if self.ensure_all_samples:
+            return int(np.ceil(self.n / self.batch_size))
+        return self.n // self.batch_size
+
+    def __getitem__(self, index):
+        """Generate one batch of data"""
+
+        # Generate indexes of the batch
+        indexes = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
+
+        # Find list of IDs
+        list_IDs_temp = self.list_IDs[indexes]
+
+        # Generate data
+        x_batch, y_batch = self.__data_generation(list_IDs_temp)
+
+        return x_batch, y_batch
+
+    def on_epoch_end(self):
+        """Updates indexes after each epoch"""
+        self.indexes = np.arange(len(self.list_IDs))
+        if self.shuffle:
+            np.random.shuffle(self.indexes)
+
+    def __data_generation(self, list_IDs_temp):
+        """Generates data containing batch_size samples"""
+
+        # fill labels
+        demand = self.df.loc[list_IDs_temp, 'demand'].values.astype(np.float32)
+        y_batch = {'q%d' % d: demand for d in range(9)}
+
+        # fill features
+        x_batch = self.df.loc[list_IDs_temp, self.features]
+        x_batch = pd.get_dummies(x_batch, columns=self.categorical_features)  # , dummy_na=True)
+        x_batch = x_batch.replace(np.nan, 0)
+        x_batch = x_batch.values
+
+        return x_batch, y_batch
+
+    def flow(self, epochs=None):
+        """returns a generator that will yield batches infinitely"""
+        epochs_done = 0
+        while True:
+            for index in range(self.__len__()):
+                batch_x, batch_y = self.__getitem__(index)
+                yield batch_x, batch_y
+
+            # track nr. of epochs
+            epochs_done += 1
+            if epochs is not None and epochs_done == epochs:
+                break  # stop yielding new elements
+
+            # do on epoch end
             self.on_epoch_end()
 
 
