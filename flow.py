@@ -161,7 +161,8 @@ def create_submission(sales_pred, submission_dir=None, filename=None, add_timest
         sub.to_csv(submission_dir + "submission_{}.csv".format(timestamp))
 
 
-def model_predict(model, val_batch_creator):
+def model_predict(model, val_batch_creator, verbose=True):
+    if verbose: print("Predicting...")
     # predict
     y_pred = model.predict(val_batch_creator)
 
@@ -181,7 +182,8 @@ def denorm_preds(df, data_dir, level=9, verbose=True):
     return df
 
 
-def warp_preds_to_ref_form(df, calendar, quantiles):
+def warp_preds_to_ref_form(df, calendar, quantiles, level, verbose=True):
+    if verbose: print("Warping predictions...")
     # Intitialize magic warp
     pred_cols = ['pred_q%d' % d for d in range(9)]
     df = df.melt(id_vars=['id', 'date'], value_vars=pred_cols, var_name="quantile", value_name="prediction")
@@ -198,11 +200,14 @@ def warp_preds_to_ref_form(df, calendar, quantiles):
     df['id'] = df.apply(lambda row: row.id_q.split('|')[0], axis=1)
     df['quantile'] = df.apply(lambda row: quantile_map[row.id_q.split('|')[1]], axis=1)
     df = df.drop(columns=['id_q'])
-    df['level'] = 9
+    df['level'] = level
     df['id'] = df['id'] + '_' + df['quantile'] + '_evaluation'
     df['quantile'] = df['quantile'].astype(float)
 
     # Finalise magic
+    if 'date' in calendar.columns:
+        calendar = calendar.set_index('date')
+        calendar.index = pd.to_datetime(calendar.index)
     cols = [calendar.loc[col].d if isinstance(col, pd.Timestamp) else col for col in df.columns]
     df.columns = cols
     d_cols = select_day_nums(df, as_int=False)
@@ -210,11 +215,11 @@ def warp_preds_to_ref_form(df, calendar, quantiles):
     return df
 
 
-def plot_some(pred_df, ref, q=0.500):
+def plot_some(pred_df, ref, level, q=0.500):
     d_cols = select_day_nums(pred_df, as_int=False)
     # select true sales
     real_sales = ref.sales_true_quantiles.loc[
-        (ref.sales_true_quantiles.level == 9) & (ref.sales_true_quantiles['quantile'] == q),
+        (ref.sales_true_quantiles.level == level) & (ref.sales_true_quantiles['quantile'] == q),
         d_cols]
 
     # select predicted sales
@@ -231,7 +236,7 @@ def plot_some(pred_df, ref, q=0.500):
         ax.set_ylabel("Sales")
 
 
-def evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir, level):
+def evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir, level, verbose=True):
     # calculate model predictions
     df = model_predict(model, val_batch_creator)
 
@@ -239,14 +244,16 @@ def evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir,
     df = denorm_preds(df, data_dir=data_dir, level=level)
 
     # perform absolute magic
-    df = warp_preds_to_ref_form(df, calendar=calendar, quantiles=quantiles)
+    df = warp_preds_to_ref_form(df, calendar=calendar, quantiles=quantiles, level=level)
 
+    if verbose: print("Evaluating..")
     # calculate (and display) WSPL
     metrics = ref.evaluate_WSPL(df)
-    print(metrics)
+    if verbose: print(metrics)
 
-    # preview some predictions
-    plot_some(df, ref)
+    if verbose:
+        # preview some predictions
+        plot_some(df, ref, level=level)
 
     return metrics, df
 

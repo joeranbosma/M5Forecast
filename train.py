@@ -317,7 +317,7 @@ class Logger(Callback):
         pass
 
     # first try: 7.687106850995075/0.0018890968224565899
-    def plot(self, experimental_pinball_boost=3.671080060420607 / 0.03552745282649994, clear=True):
+    def plot(self, experimental_pinball_boost=10.55641663442216/2.0988, clear=True):
         if clear:
             clear_output()
 
