@@ -10,7 +10,7 @@ import pandas as pd
 
 
 # adapted from from https://www.kaggle.com/robertburbidge/lightgbm-poisson-w-scaled-pinball-loss
-def simple_fe(data, DAYS_PRED=28):
+def aggregate_adapted_fe(data, DAYS_PRED=28):
     # demand features(過去の数量から変数生成)
     #
     for diff in [0, 1, 2]:
