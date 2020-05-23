@@ -12,3 +12,4 @@ submissions/
 /custom_layer/.settings
 submissions_uncertainty/
 models/
+wandb/

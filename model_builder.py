@@ -74,15 +74,17 @@ def get_simple_dist_model(inp_shape, num_nodes=64, sigma_coefs=None):
     return model
 
 
-def get_simple_dense_model(inp_shape, num_nodes=64, bottleneck_nodes=2):
+def get_simple_dense_model(inp_shape, num_nodes=64, num_layers=3, bottleneck_nodes=2):
     # clear previous sessions
     K.clear_session()
 
     inp = Input(inp_shape, name="input")
     x = inp
-    x = Dense(num_nodes, activation="relu")(x)
-    x = Dense(num_nodes, activation="relu")(x)
-    x = Dense(num_nodes, activation="relu")(x)
+
+    # add dense layers
+    for i in range(num_layers):
+        x = Dense(num_nodes, activation="relu")(x)
+
     x = Dense(bottleneck_nodes)(x)  # represents mu, sigma
 
     out_q0 = Dense(1, name="q0")(x)
