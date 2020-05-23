@@ -270,13 +270,13 @@ class Logger(Callback):
         self.metric_names.extend(['q{}_loss'.format(d) for d in range(9)])
         for m in self.metric_names:
             self.train_metrics[m] = []
-        print("Tracking {}".format(self.metric_names))
+        # print("Tracking {}".format(self.metric_names))
 
         self.val_metrics = {}
         self.val_metric_names = ['val_{}'.format(m) for m in self.metric_names]
         for m in self.val_metric_names:
             self.val_metrics[m] = []
-        print("Tracking {}".format(self.val_metric_names))
+        # print("Tracking {}".format(self.val_metric_names))
 
     def on_batch_end(self, batch, logs={}):
         # log training metrics
@@ -316,47 +316,40 @@ class Logger(Callback):
     def validate(self):
         pass
 
-    # first try: 7.687106850995075/0.0018890968224565899
-    def plot(self, experimental_pinball_boost=10.55641663442216/2.0988, clear=True):
+    def plot(self, clear=True):
         if clear:
             clear_output()
 
-        f, axes2d = plt.subplots(2, 2, figsize=(18, 12))
+        f, axes = plt.subplots(1, 2, figsize=(18, 6))
 
         # plot losses
         losses = self.train_metrics['loss']
         val_losses = self.val_metrics['val_loss']
 
-        for i, axes in enumerate(axes2d):
-            if i == 1:
-                # experimental: convert normalised PL -> WSPL
-                losses = np.array(losses) * experimental_pinball_boost
-                val_losses = np.array(val_losses) * experimental_pinball_boost
+        ax = axes[0]
+        ax.plot(range(1, 1 + len(losses)), losses, label='Train')
+        if len(val_losses):
+            ax.plot(self.val_x, val_losses, '.-', label='Validation')
+        ax.set_xlabel("Step")
+        ax.set_ylabel(r"normalised PL")
+        ax.set_title("Loss")
+        ax.set_ylim(0)
 
-            ax = axes[0]
-            ax.plot(range(1, 1 + len(losses)), losses, label='Train')
-            if len(val_losses):
-                ax.plot(self.val_x, val_losses, '.-', label='Validation')
-            ax.set_xlabel("Step")
-            ax.set_ylabel(r"normalised PL")
-            ax.set_title("Loss")
-            ax.set_ylim(0)
+        # plot final losses
+        ax = axes[1]
+        N = len(losses)
+        n = min(501, max(100, N - 100))
+        ax.plot(range(1 + N - n, 1 + N), losses[-n:], label='Train')
+        if len(val_losses):
+            indexer = [x > (N - n) for x in self.val_x]
+            ax.plot(np.array(self.val_x)[indexer], np.array(val_losses)[indexer], '.-', label='Validation')
+        ax.set_xlabel("Step")
+        ax.set_ylabel(r"normalised PL")
+        ax.set_title("Loss final {} steps".format(n))
+        ax.set_ylim(0)
 
-            # plot final losses
-            ax = axes[1]
-            N = len(losses)
-            n = min(501, max(100, N - 100))
-            ax.plot(range(1 + N - n, 1 + N), losses[-n:], label='Train')
-            if len(val_losses):
-                indexer = [x > (N - n) for x in self.val_x]
-                ax.plot(np.array(self.val_x)[indexer], np.array(val_losses)[indexer], '.-', label='Validation')
-            ax.set_xlabel("Step")
-            ax.set_ylabel(r"normalised PL")
-            ax.set_title("Loss final {} steps".format(n))
-            ax.set_ylim(0)
-
-            for ax in axes:
-                ax.legend()
+        for ax in axes:
+            ax.legend()
 
         plt.show()
 
