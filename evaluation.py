@@ -261,7 +261,7 @@ class Referee(object):
         metrics['WSPL'] = WSPL
         return metrics
 
-    def calc_SPL(self, quantiles_pred, level=None, groupby=None, weights=None, scale=None):
+    def calc_SPL(self, quantiles_pred, level=None, groupby=None, weights=None, scale=None, clip_zero=False):
         """Calculate the Scaled Pinball Loss for a given aggregation level"""
         if level:
             if groupby is None: groupby = self.aggregation_levels[level]
@@ -273,6 +273,10 @@ class Referee(object):
         # Select the correct predictions and true sales based on the input level
         predictions = quantiles_pred[quantiles_pred['level'] == level]
         true_sales = self.sales_true_quantiles[self.sales_true_quantiles['level'] == level]
+
+        if clip_zero:
+            d_cols = select_day_nums(predictions, as_int=False)
+            predictions[d_cols] = predictions[d_cols].clip(lower=0)
 
         # Make sure that both the predictions and the true sales have the same
         # id list, otherwise our calculation will go wrong

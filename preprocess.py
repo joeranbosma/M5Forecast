@@ -13,6 +13,8 @@ from flow import restore_tags_converted_sales, read_converted_sales
 from lightgbm_kernel import read_data, encode_categorical, reduce_mem_usage
 from feature_extraction import aggregate_adapted_fe
 
+from sklearn.preprocessing import LabelEncoder
+
 
 categorical_features = {
     1: [],
@@ -101,6 +103,31 @@ def preprocess(level, n_years, save_prepared_dataset=False, data_dir=None):
         print("Saving to file..")
         data.to_pickle(fn)
         print("Finished.")
+
+    return data
+
+
+def reset_categorical_features(data, available_cat_features):
+    # Set the NaNs in these categories as a single element
+    for col in ['event_name_1', 'event_type_1', 'event_name_2', 'event_type_2']:
+        data[col] = data[col].cat.add_categories(-1).fillna(-1)
+
+    # re-index the categories to match the input of the Embedding layer
+    for col in available_cat_features:
+        le = LabelEncoder()
+        data[col] = le.fit_transform(data[col])
+
+    # re-set the categories as pandas categories for proper pd.get_dummies
+    for col in available_cat_features:
+        data[col] = data[col].astype('category')
+
+    # set NaN values of shift_x, rolling_std_x, etc. to zero
+    nan_cols = data.isna().sum()
+    nan_cols = nan_cols[nan_cols != 0]
+
+    for col in nan_cols.index:
+        mask = data[col].isna()
+        data.loc[mask, col] = 0
 
     return data
 

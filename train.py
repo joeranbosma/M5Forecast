@@ -161,7 +161,7 @@ class BatchCreator(Sequence):
     """
 
     def __init__(self, df, features, labels, batch_size=128, shuffle=True, ensure_all_samples=False,
-                 inp_shape=(3244,), out_shape=(9,), categorical_features=None):
+                 inp_shape=(3244,), out_shape=(9,), categorical_features=None, check_nan=True):
         """Initialization"""
         # Save settings
         self.df = df
@@ -175,6 +175,7 @@ class BatchCreator(Sequence):
         self.out_shape = out_shape
         self.categorical_features = [c for c in categorical_features
                                      if c in features]
+        self.check_nan = check_nan
 
         # initialize indices
         self.indexes = None
@@ -222,9 +223,11 @@ class BatchCreator(Sequence):
 
         # convert to floats
         x_batch = x_batch.astype(np.float32)
-        # replace nan with zero
-        mask = x_batch.isna()
-        x_batch[mask] = 0
+
+        if self.check_nan:
+            # replace nan with zero
+            mask = x_batch.isna()
+            x_batch[mask] = 0
 
         # convert to numpy array and return
         x_batch = x_batch.values
@@ -300,7 +303,7 @@ class Logger(Callback):
             # evaluate validation set
             val_losses = self.model.evaluate(self.val_batch_creator.flow(),
                                              steps=self.val_batch_creator.__len__())
-            for i, m in self.val_metric_names:
+            for i, m in enumerate(self.val_metric_names):
                 self.val_metrics[m] = val_losses[i]
 
         self.val_x.append(num_train_steps)
@@ -440,3 +443,58 @@ def make_loss(ref, train_norm):
         # sum
         return K.sum(scaled_MSE)
     return WRMSSE_store
+
+
+def plot_confidence_series(quantile_preds, quantiles, ax=None):
+    if ax is None:
+        f, ax = plt.subplots(1, 1, figsize=(18, 6))
+
+    x = np.arange(len(quantile_preds[0.5]))
+
+    # plot median as thick line
+    ax.plot(x, quantile_preds[0.5], 'k-', linewidth=2, label="Median")
+
+    # plot true sales
+    ax.plot(x, quantile_preds['true'], 'g-', linewidth=3, label='True')
+
+    # plot confidence intervals
+    conf_labels = ['50%', '67%', '95%', '99%']
+    for i in range(4):
+        q1 = quantiles[i]
+        q2 = quantiles[-i - 1]
+        ax.fill_between(x, quantile_preds[q1], quantile_preds[q2], color='C0', alpha=(i + 1) * 0.2,
+                        label=conf_labels[i])
+
+    ax.set_xlim(x.min(), x.max())
+    ax.set_ylim(0)
+    ax.set_xlabel("Predicted day")
+    ax.set_ylabel("Predicted number of sales")
+    ax.set_title(quantile_preds['label'])
+    ax.legend()
+
+
+def plot_some_confidence_intervals(df, val_batch_creator, level, quantiles, data_dir='data/', num=9, plot_shape=(3, 3)):
+    indices = range(num)
+    norm = pd.read_csv(data_dir + 'prep/norm_level_{}.csv'.format(level))
+
+    f, axes = plt.subplots(nrows=plot_shape[0], ncols=plot_shape[1], figsize=(18, 6 * plot_shape[0]))
+
+    for idx, ax in zip(indices, np.ravel(axes)):
+        quantile_preds = {}
+        d_cols = select_day_nums(df, as_int=False)
+
+        for i, q in enumerate(quantiles):
+            selected_series = df.loc[df['quantile'] == q].iloc[idx]
+            quantile_preds[q] = selected_series[d_cols].values.astype(float)
+
+        series_id = "_".join(selected_series['id'].split('_')[0:-2])  # e.g. FOODS_1_010_X_0.995_evaluation
+        true_sales = val_batch_creator.df.loc[(val_batch_creator.df['id'] == series_id), 'demand']
+        series_norm = norm.loc[norm['id'] == series_id].norm.values[0]
+        quantile_preds['true'] = (true_sales * series_norm).values
+        quantile_preds['label'] = series_id
+
+        # plot
+        plot_confidence_series(quantile_preds, quantiles=quantiles, ax=ax)
+
+    plt.tight_layout()
+    plt.show()
