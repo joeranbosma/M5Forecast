@@ -165,7 +165,6 @@ class BatchCreator(Sequence):
         """Initialization"""
         # Save settings
         self.df = df
-        self.list_IDs = self.df.index
         self.features = features
         self.labels = labels
         self.batch_size = batch_size
@@ -177,12 +176,12 @@ class BatchCreator(Sequence):
                                      if c in features]
         self.check_nan = check_nan
 
+        # calculate properties
+        self.n = self.df.index.size
+
         # initialize indices
         self.indexes = None
         self.on_epoch_end()
-
-        # calculate properties
-        self.n = self.df.index.size
 
     def __len__(self):
         """Denotes the number of batches per epoch"""
@@ -196,29 +195,26 @@ class BatchCreator(Sequence):
         # Generate indexes of the batch
         indexes = self.indexes[index * self.batch_size:(index + 1) * self.batch_size]
 
-        # Find list of IDs
-        list_IDs_temp = self.list_IDs[indexes]
-
         # Generate data
-        x_batch, y_batch = self.__data_generation(list_IDs_temp)
+        x_batch, y_batch = self.__data_generation(indexes)
 
         return x_batch, y_batch
 
     def on_epoch_end(self):
         """Updates indexes after each epoch"""
-        self.indexes = np.arange(len(self.list_IDs))
+        self.indexes = np.arange(self.n)
         if self.shuffle:
             np.random.shuffle(self.indexes)
 
-    def __data_generation(self, list_IDs_temp):
+    def __data_generation(self, indexes):
         """Generates data containing batch_size samples"""
 
         # fill labels
-        demand = self.df.loc[list_IDs_temp, 'demand'].values.astype(np.float32)
+        demand = self.df.iloc[indexes]['demand'].values.astype(np.float32)
         y_batch = {'q%d' % d: demand for d in range(9)}
 
         # fill features
-        x_batch = self.df.loc[list_IDs_temp, self.features]
+        x_batch = self.df.iloc[indexes][self.features]
         x_batch = pd.get_dummies(x_batch, columns=self.categorical_features)  # , dummy_na=True)
 
         # convert to floats
