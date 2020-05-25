@@ -300,7 +300,7 @@ class Logger(Callback):
             val_losses = self.model.evaluate(self.val_batch_creator.flow(),
                                              steps=self.val_batch_creator.__len__())
             for i, m in enumerate(self.val_metric_names):
-                self.val_metrics[m] = val_losses[i]
+                self.val_metrics[m].append(val_losses[i])
 
         self.val_x.append(num_train_steps)
         spl = self.val_metrics['val_loss'][-1]

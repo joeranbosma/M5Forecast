@@ -5,7 +5,7 @@ M5Forecast - Preprocess
 Created: 23 may 2020
 """
 
-import gc
+import os, gc
 import numpy as np
 import pandas as pd
 
@@ -33,7 +33,7 @@ categorical_features = {
 
 
 # adapted from from https://www.kaggle.com/robertburbidge/lightgbm-poisson-w-scaled-pinball-loss
-def preprocess(level, n_years, save_prepared_dataset=False, data_dir=None):
+def preprocess(level, n_years, DAYS_PRED=None, save_prepared_dataset=False, data_dir=None):
     # read data for pipeline from lightgbm-poisson-w-scaled-pinball-loss.ipynb
     calendar, sell_prices, sales_train_val, submission = read_data()  # with memory reduction
 
@@ -45,7 +45,8 @@ def preprocess(level, n_years, save_prepared_dataset=False, data_dir=None):
 
     ## Count
     NUM_ITEMS = sales_train_val.shape[0]  # 1 / ... / 70 / ... / 30,240
-    DAYS_PRED = submission.shape[1] - 1  # 28
+    if DAYS_PRED is None:
+        DAYS_PRED = submission.shape[1] - 1  # 28
     print(NUM_ITEMS, DAYS_PRED)
 
     nrows = int(365 * n_years * NUM_ITEMS)
@@ -97,8 +98,9 @@ def preprocess(level, n_years, save_prepared_dataset=False, data_dir=None):
     data = reduce_mem_usage(aggregate_adapted_fe(data, DAYS_PRED=DAYS_PRED))
 
     if save_prepared_dataset:
-        fn = data_dir + 'prep/level_{}_simple_fe_{}_{}_normalised_demand.pickle'.format(
-            level, data.date.min().date().strftime("%Y_%m_%d"), data.date.max().date().strftime("%Y_%m_%d")
+        fn = data_dir + 'prep/level_{}_simple_fe_{}_{}_normalised_demand_lag_{}.pickle'.format(
+            level, data.date.min().date().strftime("%Y_%m_%d"), data.date.max().date().strftime("%Y_%m_%d"),
+            DAYS_PRED
         )
         print("Saving to file..")
         data.to_pickle(fn)
@@ -159,7 +161,7 @@ def pandas_cat_data(data):
     return data, available_cat_features
 
 
-def get_features(level, sell_price_features=True):
+def get_features(level, prediction_lag=28, sell_price_features=True):
     features = [
         "event_name_1",
         "event_type_1",
@@ -169,9 +171,9 @@ def get_features(level, sell_price_features=True):
         "snap_TX",
         "snap_WI",
         # demand features.
-        "shift_t28",
-        "shift_t29",
-        "shift_t30",
+        "shift_t{}".format(prediction_lag),
+        "shift_t{}".format(prediction_lag+1),
+        "shift_t{}".format(prediction_lag+2),
         "rolling_std_t7",
         "rolling_std_t30",
         "rolling_std_t60",
@@ -214,3 +216,39 @@ def get_features(level, sell_price_features=True):
         ]
 
     return features
+
+
+def read_and_preprocess_data(level, data_dir='data/', day_start=None, prediction_lag=28, verbose=True):
+    # try reading from file
+    if day_start is None:
+        day_start = '2014_04_26' if level == 12 else '2011_01_29'
+    day_end = '2016_04_24'
+    fn = data_dir + 'prep/level_{}_simple_fe_{}_{}_normalised_demand_lag_{}.pickle'.format(
+        level, day_start, day_end, prediction_lag)
+
+    # check if already preprocessed
+    if os.path.exists(fn):
+        print("Reading from file..") if verbose else None
+        data = pd.read_pickle(fn)
+    else:
+        # choose number of years to include
+        n_years = 2 if level == 12 else 6
+
+        # preform preprocessing
+        data = preprocess(level=level, n_years=n_years, DAYS_PRED=prediction_lag,
+                          save_prepared_dataset=True, data_dir=data_dir)
+
+    print("Converting to pandas data..") if verbose else None
+    # set categorical features
+    data, available_cat_features = pandas_cat_data(data)
+
+    print("Resetting categories..") if verbose else None
+    # reset categorical features, set NaN events as additional category, set NaN shift/std/mean/kurt/skew to zero
+    data = reset_categorical_features(data, available_cat_features)
+
+    # select features
+    features = get_features(level=level, prediction_lag=prediction_lag,
+                            sell_price_features=('sell_price' in data.columns))
+    print(features) if verbose else None
+
+    return data, features, available_cat_features

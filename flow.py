@@ -228,7 +228,8 @@ def plot_some(pred_df, ref, level, q=0.500):
     # plot
     f, axes = plt.subplots(2, 3, figsize=(18, 12))
 
-    for i, ax in enumerate(np.ravel(axes)):
+    # plot the first 6 series, if available
+    for i, ax in zip(range(df.index.size), np.ravel(axes)):
         real_sales.iloc[i].T.plot(ax=ax, label="True")
         df.iloc[i][d_cols].plot(ax=ax, label="Pred")
         ax.legend()
