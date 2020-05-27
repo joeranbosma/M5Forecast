@@ -69,7 +69,6 @@ def preprocess(level, n_years, DAYS_PRED=None, save_prepared_dataset=False, data
                               id_vars=['id', *categorical_features[level]],
                               var_name='day', value_name='demand')
     print('Melted sales train validation has {} rows and {} columns'.format(*sales_train_val.shape))
-    sales_train_val.head()
 
     print("Selecting {} rows ({:.1%})".format(nrows, nrows / sales_train_val.index.size))
     data = sales_train_val.iloc[-nrows:, :]
@@ -221,7 +220,7 @@ def get_features(level, prediction_lag=28, sell_price_features=True):
 def read_and_preprocess_data(level, data_dir='data/', day_start=None, prediction_lag=28, verbose=True):
     # try reading from file
     if day_start is None:
-        day_start = '2014_04_26' if level == 12 else '2011_01_29'
+        day_start = '2011_01_29' #'2014_04_26' if level == 12 else '2011_01_29'
     day_end = '2016_04_24'
     fn = data_dir + 'prep/level_{}_simple_fe_{}_{}_normalised_demand_lag_{}.pickle'.format(
         level, day_start, day_end, prediction_lag)

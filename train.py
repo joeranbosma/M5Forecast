@@ -11,12 +11,15 @@ import matplotlib.pyplot as plt
 from IPython.display import clear_output
 import time
 
-from tensorflow.keras.callbacks import Callback
+from tensorflow.keras.callbacks import Callback, LearningRateScheduler
+from tensorflow.keras.optimizers import Adam
 import tensorflow.keras.backend as K
 from tensorflow.keras.utils import Sequence
 import tensorflow as tf
 
-from flow import select_day_nums
+from flow import select_day_nums, evaluate_model
+from model_builder import get_pinball_losses
+from preprocess import read_and_preprocess_data
 
 
 class WindowBatchCreator(Sequence):
@@ -494,3 +497,129 @@ def plot_some_confidence_intervals(df, val_batch_creator, level, quantiles, data
 
     plt.tight_layout()
     plt.show()
+
+
+def prepare_training(data, features, labels, available_cat_features, batch_size=1024):
+    # going to evaluate with the last 28 days
+    x_train = data[data['date'] <= '2016-03-27']
+    x_val = data[(data['date'] > '2016-03-27') & (data['date'] <= '2016-04-24')]
+
+    # make batch creators
+    labels = ['demand']
+
+    def get_generators(bs=1024):
+        train_bc = BatchCreator(x_train, features, labels, categorical_features=available_cat_features,
+                                batch_size=bs, check_nan=False)
+        val_bc = BatchCreator(x_val, features, labels, shuffle=False, ensure_all_samples=True,
+                              categorical_features=available_cat_features, batch_size=bs, check_nan=False)
+
+        return train_bc, val_bc
+
+    train_batch_creator, val_batch_creator = get_generators(bs=batch_size)
+
+    # determine model input shape
+    x, y = next(train_batch_creator.flow())
+    INP_SHAPE = x[0].shape
+
+    # make losses
+    losses = get_pinball_losses()
+
+    return train_batch_creator, val_batch_creator, get_generators, INP_SHAPE, losses
+
+
+def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size,
+                            ref, calendar, quantiles=None, data_dir='data/', model_dir='models/uncertainty/', warmup_lr_list=None,
+                            finetune_lr_list=None, warmup_epochs=10, finetune_epochs=10,
+                            model_name="stepped_lr", validation_steps=None, verbose=True):
+    if warmup_lr_list is None:
+        warmup_lr_list = [1e-5, 1e-4, 1e-3, 2e-3, 3e-3, 1e-3]
+    if finetune_lr_list is None:
+        finetune_lr_list = [2e-3, 3e-3, 1e-3, 3e-4, 1e-4]
+    if quantiles is None:
+        quantiles = [0.005, 0.025, 0.165, 0.25, 0.5, 0.75, 0.835, 0.975, 0.995]
+    print("Starting level {}..".format(level)) if verbose else None
+
+    # read data
+    data, features, available_cat_features = read_and_preprocess_data(level=level)
+
+    # setup for training
+    batch_size = warmup_batch_size[level]
+    labels = ['demand']
+    train_batch_creator, val_batch_creator, get_generators, INP_SHAPE, losses = prepare_training(
+        data, features, labels, available_cat_features, batch_size=batch_size)
+
+    # compile model and initialize logger
+    model.compile(optimizer=Adam(learning_rate=1e-3), loss=losses)
+    logger = Logger(val_batch_creator)
+
+    # train model: warm-up
+    lr_list = warmup_lr_list[0:3]
+    for lr_block in lr_list:
+        # set lr (without recompiling and losing momentum)
+        def lr_scheduler(epoch, lr):
+            return lr_block
+
+        lr_callback = LearningRateScheduler(lr_scheduler, verbose=1)
+
+        # train model
+        val_steps = validation_steps if validation_steps is not None else val_batch_creator.__len__()
+        history = model.fit(train_batch_creator.flow(), epochs=warmup_epochs, steps_per_epoch=100,
+                            validation_data=val_batch_creator.flow(), validation_steps=val_steps,
+                            callbacks=[lr_callback, logger])
+
+    # evaluate
+    metrics, df = evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir, level)
+    metrics1 = metrics
+
+    # save warm-up result
+    model.save_weights(model_dir + 'level{}_{}_part1_WSPL{:.2e}.h5'.format(level, model_name, metrics['WSPL']))
+
+    # train model: continued
+    lr_list = warmup_lr_list[3:6]
+    for lr_block in lr_list:
+        # set lr (without recompiling and losing momentum)
+        def lr_scheduler(epoch, lr):
+            return lr_block
+
+        lr_callback = LearningRateScheduler(lr_scheduler, verbose=1)
+
+        # train model
+        val_steps = validation_steps if validation_steps is not None else val_batch_creator.__len__()
+        history = model.fit(train_batch_creator.flow(), epochs=warmup_epochs, steps_per_epoch=100,
+                            validation_data=val_batch_creator.flow(), validation_steps=val_steps,
+                            callbacks=[lr_callback, logger])
+
+    # evaluate
+    metrics, df = evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir, level)
+    metrics2 = metrics
+
+    # save continued result
+    model.save_weights(model_dir + 'level{}_{}_part2_WSPL{:.2e}.h5'.format(level, model_name, metrics['WSPL']))
+
+    # fine-tune
+    batch_size = finetune_batch_size[level]
+    train_batch_creator, val_batch_creator = get_generators(batch_size)
+
+    lr_list = finetune_lr_list
+
+    for lr_block in lr_list:
+        # set lr (without recompiling and losing momentum)
+        def lr_scheduler(epoch, lr):
+            return lr_block
+
+        lr_callback = LearningRateScheduler(lr_scheduler, verbose=1)
+
+        # train model
+        val_steps = validation_steps if validation_steps is not None else val_batch_creator.__len__()
+        history = model.fit(train_batch_creator.flow(), epochs=finetune_epochs, steps_per_epoch=100,
+                            validation_data=val_batch_creator.flow(), validation_steps=val_steps,
+                            callbacks=[lr_callback, logger])
+
+    # calculate WSPL and save metrics
+    metrics, df = evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir, level)
+    metrics3 = metrics
+
+    # save fine-tuned model
+    model.save_weights(model_dir + 'level{}_{}_part3_WSPL{:.2e}.h5'.format(level, model_name, metrics['WSPL']))
+
+    return model, logger, metrics1, metrics2, metrics3

@@ -12,6 +12,18 @@ from tqdm import tqdm as tqdm
 import time
 import matplotlib.pyplot as plt
 from lightgbm_kernel import reduce_mem_usage
+import pickle
+
+
+def save_object(obj, fn):
+    with open(fn, 'wb') as handle:
+        pickle.dump(obj, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_object(fn):
+    with open(fn, 'rb') as handle:
+        obj= pickle.load(handle)
+    return obj
 
 
 def load_data(data_dir=None):
@@ -161,6 +173,48 @@ def create_submission(sales_pred, submission_dir=None, filename=None, add_timest
         sub.to_csv(submission_dir + "submission_{}.csv".format(timestamp))
 
 
+def create_uncertainty_submission_from_ref_format(sales_pred, submission_dir=None, filename=None, add_timestamp=False):
+    """Create submission file in csv format, from df in format accepted by Referee"""
+
+    if submission_dir is None:
+        submission_dir = os.environ['SUB_DIR']
+
+    # check if id column is in correct format
+    assert 'Total_X_0.005_evaluation' in sales_pred['id'].values, "Supply id column in submission format"
+
+    # Drop meta-columns and rename columns to F1, ..., F28
+    preds1 = sales_pred.drop(columns=['quantile', 'level'])
+    preds1 = preds1.set_index('id')
+    preds1.columns = ['F%d' % d for d in range(1, 28 + 1)]
+
+    # At this point the second 28-day period is just the same
+    if '_evaluation' in preds1.index[0]:
+        needle = '_evaluation'
+        replacement = '_validation'
+    else:
+        needle = '_validation'
+        replacement = '_evaluation'
+    preds2 = preds1.copy()
+    preds2.index = [d.replace(needle, replacement) for d in preds2.index]
+
+    sub = pd.concat((preds1, preds2))
+    sub.index.name = 'id'
+
+    if filename is not None:
+        timestamp = ''
+        if add_timestamp:
+            timestamp = time.strftime('_%Y-%m-%d_%H%M', time.localtime())
+        filename = submission_dir + "submission_{}{}".format(filename, timestamp)
+    else:
+        timestamp = time.strftime('%Y-%m-%d_%H%M', time.localtime())
+        filename = submission_dir + "submission_{}".format(timestamp)
+
+    filename += ".csv.gz"
+    sub.to_csv(filename, float_format='%.3f', compression='gzip')
+
+    return filename
+
+
 def model_predict(model, val_batch_creator, verbose=True):
     if verbose: print("Predicting...")
     # predict
@@ -237,7 +291,7 @@ def plot_some(pred_df, ref, level, q=0.500):
         ax.set_ylabel("Sales")
 
 
-def evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir, level, verbose=True):
+def evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir, level, validation_set=False, verbose=True):
     # calculate model predictions
     df = model_predict(model, val_batch_creator)
 
@@ -246,6 +300,9 @@ def evaluate_model(model, ref, val_batch_creator, calendar, quantiles, data_dir,
 
     # perform absolute magic
     df = warp_preds_to_ref_form(df, calendar=calendar, quantiles=quantiles, level=level)
+
+    if validation_set:
+        return df
 
     if verbose: print("Evaluating..")
     # calculate (and display) WSPL

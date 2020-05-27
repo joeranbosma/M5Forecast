@@ -46,11 +46,11 @@ def get_custom_layer(sigma_coef):
     return custom_layer
 
 
-def get_simple_dist_model(inp_shape, num_nodes=64, sigma_coefs=None, clear_sesion=True):
+def get_simple_dist_model(inp_shape, num_nodes=64, sigma_coefs=None, clear_session=True):
     if sigma_coefs is None:
         sigma_coefs = [-2.57583, -1.95996, -0.974114, -0.674, 0, 0.674, 0.9741114, 1.95996, 2.57583]
 
-    if clear_sesion:
+    if clear_session:
         # clear previous sessions
         K.clear_session()
 
@@ -75,8 +75,8 @@ def get_simple_dist_model(inp_shape, num_nodes=64, sigma_coefs=None, clear_sesio
     return model
 
 
-def get_simple_dense_model(inp_shape, num_nodes=64, num_layers=3, bottleneck_nodes=2, clear_sesion=True):
-    if clear_sesion:
+def get_simple_dense_model(inp_shape, num_nodes=64, num_layers=3, bottleneck_nodes=2, clear_session=True):
+    if clear_session:
         # clear previous sessions
         K.clear_session()
 
@@ -151,11 +151,11 @@ def apply_skewness(sigma_coefs, skewness):
     return mod_sigma_coefs
 
 
-def get_extended_dist_model(inp_shape, sigma_coefs, clear_sesion=True):
+def get_extended_dist_model(inp_shape, sigma_coefs, clear_session=True):
     if sigma_coefs is None:
         sigma_coefs = [-2.57583, -1.95996, -0.974114, -0.674, 0, 0.674, 0.9741114, 1.95996, 2.57583]
 
-    if clear_sesion:
+    if clear_session:
         # clear previous sessions
         K.clear_session()
 
@@ -249,8 +249,8 @@ def get_direct_custom_layer(i):
     return custom_layer
 
 
-def get_direct_dist_model(inp_shape, num_nodes=256, clear_sesion=True):
-    if clear_sesion:
+def get_direct_dist_model(inp_shape, num_nodes=256, clear_session=True):
+    if clear_session:
         # clear previous sessions
         K.clear_session()
 
