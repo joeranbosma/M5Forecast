@@ -186,10 +186,12 @@ def get_extended_dist_model(inp_shape, sigma_coefs, clear_session=True):
     return model
 
 
-def get_variable_dist_model(inp_shape, sigma_coefs, num_nodes=64, final_activation="exponential", clear_session=True):
+def get_variable_dist_model(inp_shape, sigma_coefs=None, num_nodes=64, final_activation="exponential", clear_session=True):
     if clear_session:
         # clear previous sessions
         K.clear_session()
+    if sigma_coefs is None:
+        sigma_coefs = [-2.57583, -1.95996, -0.974114, -0.674, 0, 0.674, 0.9741114, 1.95996, 2.57583]
 
     inp = Input(inp_shape, name="input")
     x = inp
