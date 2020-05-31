@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
-import time
+import time, gc
 
 from tensorflow.keras.callbacks import Callback, LearningRateScheduler
 from tensorflow.keras.optimizers import Adam
@@ -527,10 +527,29 @@ def prepare_training(data, features, labels, available_cat_features, batch_size=
     return train_batch_creator, val_batch_creator, get_generators, INP_SHAPE, losses
 
 
-def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size,
-                            ref, calendar, quantiles=None, data_dir='data/', model_dir='models/uncertainty/', warmup_lr_list=None,
-                            finetune_lr_list=None, warmup_epochs=10, finetune_epochs=10,
-                            model_name="stepped_lr", validation_steps=None, verbose=True):
+def add_lgb_predictions(data, level, features, lgb_prediction_dir):
+    # read predictions
+    lgb_predictions = pd.read_csv(lgb_prediction_dir + 'predictions_level{}.csv'.format(level),
+                                  index_col=0)
+
+    # drop 'demand' column and convert date to pandas datetime
+    if 'demand' in lgb_predictions.columns:
+        lgb_predictions.drop(columns=['demand'], inplace=True)
+    lgb_predictions.date = pd.to_datetime(lgb_predictions.date)
+
+    # merge lgb's predictions with the data
+    data = pd.merge(data, lgb_predictions, how='left', on=['id', 'date'])
+
+    # add feature 'lgb_pred' to the feature list
+    features.append('lgb_pred')
+
+    return data, features
+
+
+def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size, ref, calendar, quantiles=None,
+                            data_dir='data/', model_dir='models/uncertainty/', warmup_lr_list=None,
+                            finetune_lr_list=None, warmup_epochs=10, finetune_epochs=10, lgb_prediction=False,
+                            lgb_prediction_dir = None, model_name="stepped_lr", validation_steps=None, verbose=True):
     if warmup_lr_list is None:
         warmup_lr_list = [1e-5, 1e-4, 1e-3, 2e-3, 3e-3, 1e-3]
     if finetune_lr_list is None:
@@ -541,6 +560,9 @@ def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size
 
     # read data
     data, features, available_cat_features = read_and_preprocess_data(level=level)
+    if lgb_prediction:
+        print("Adding lgb prediction as feature") if verbose else None
+        data, features = add_lgb_predictions(data, level, features, lgb_prediction_dir)
 
     # setup for training
     batch_size = warmup_batch_size[level]
@@ -623,3 +645,94 @@ def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size
     model.save_weights(model_dir + 'level{}_{}_part3_WSPL{:.2e}.h5'.format(level, model_name, metrics['WSPL']))
 
     return model, logger, metrics1, metrics2, metrics3
+
+
+def get_chronological_train_val_split(data, fold=1, num_folds=5, verbose=True):
+    # get chronological train/val split
+    # fold 1 has the final 376 validation days
+    # fold 2 has days -752:-376, etc.
+
+    # setup
+    # substract one second to include first day in validation set of fold 5
+    day_start = data.date.min() - pd.Timedelta(seconds=1)
+    day_end = data.date.max()
+    num_days = day_end - day_start
+    num_days_val = (num_days / num_folds)
+
+    # select validation set
+    val_start = day_end - fold * num_days_val
+    val_end = day_end - (fold - 1) * num_days_val
+
+    print("Selecing validation days between {} and {}".format(val_start, val_end)) if verbose else None
+
+    # split
+    val_mask = (data.date > val_start) & (data.date <= val_end)
+    train = data[~val_mask]
+    val = data[val_mask]
+
+    return train, val
+
+
+def get_train_val_slit(level, fold, verbose=True):
+    # read data
+    data, features, available_cat_features = read_and_preprocess_data(level=level, verbose=verbose)
+
+    # leave final days alone
+    test = data[data['date'] > '2016-03-27']
+    data = data[data['date'] <= '2016-03-27']
+
+    # chronological train / val split
+    train, val = get_chronological_train_val_split(data, fold=fold, verbose=verbose)
+
+    return train, val, test, features
+
+
+def train_lightgbm_model(level, fold=1, params={}, model_dir='models/uncertainty/',
+                         model_name="lightgbm", verbose=True):
+    # only require lightgbm to be installed when calling this function
+    import lightgbm as lgb
+
+    # read data
+    train, val, test, features = get_train_val_slit(level, fold)
+
+    # make lgb datasets
+    labels = ['demand']
+    train_set = lgb.Dataset(train[features], train[labels])
+    val_set = lgb.Dataset(val[features], val[labels])
+
+    # cleanup memory
+    del train
+    gc.collect()
+
+    # perform training
+    evals_result = {}  # to record eval results for plotting
+    model = lgb.train(params, train_set, num_boost_round=2500, early_stopping_rounds=50,
+                      valid_sets=[val_set], verbose_eval=50,  # fobj="mae",#feval = "mae",
+                      evals_result=evals_result)
+
+    model.save_model(model_dir + model_name + "-level{}-fold{}.txt".format(level, fold))
+    ax = lgb.plot_metric(evals_result, metric='l1')
+    plt.show()
+
+    return model, evals_result, val
+
+
+def lightgbm_pred_to_df(y_pred, df):
+    ids = df['id'].unique()
+    day_start = np.datetime64(df.date.min().date())
+    day_end = np.datetime64(df.date.max().date())
+    num_days = (day_end - day_start + 1).astype(int)
+
+    y_pred_df = pd.DataFrame.from_dict({
+        'id': np.repeat(ids, num_days),
+        'date': np.tile(np.arange(day_start, day_end + 1), len(ids)),
+        'lgb_pred': y_pred,
+        'demand': df['demand'].values,
+    })
+    # y_pred_df['item_id'] = y_pred_df['id'].map(lambda x: '_'.join(x.split('_')[0:3]))
+    # y_pred_df['dept_id'] = y_pred_df['id'].map(lambda x: '_'.join(x.split('_')[0:2]))
+    # y_pred_df['cat_id'] = y_pred_df['id'].map(lambda x: '_'.join(x.split('_')[0:1]))
+    # y_pred_df['store_id'] = y_pred_df['id'].map(lambda x: '_'.join(x.split('_')[3:5]))
+    # y_pred_df['state_id'] = y_pred_df['id'].map(lambda x: '_'.join(x.split('_')[3:4]))
+
+    return y_pred_df
