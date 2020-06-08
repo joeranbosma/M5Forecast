@@ -673,9 +673,10 @@ def get_chronological_train_val_split(data, fold=1, num_folds=5, verbose=True):
     return train, val
 
 
-def get_train_val_slit(level, fold, verbose=True):
+def get_train_val_slit(level, fold, augment_events=False, verbose=True):
     # read data
-    data, features, available_cat_features = read_and_preprocess_data(level=level, verbose=verbose)
+    data, features, available_cat_features = read_and_preprocess_data(level=level, verbose=verbose,
+                                                                      augment_events=augment_events)
 
     # leave final days alone
     test = data[data['date'] > '2016-03-27']
@@ -688,12 +689,13 @@ def get_train_val_slit(level, fold, verbose=True):
 
 
 def train_lightgbm_model(level, fold=1, params={}, model_dir='models/uncertainty/',
-                         model_name="lightgbm", verbose=True):
+                         model_name="lightgbm", augment_events=False, verbose=True,
+                         num_boost_round=2500, early_stopping_rounds=50, verbose_eval=50):
     # only require lightgbm to be installed when calling this function
     import lightgbm as lgb
 
     # read data
-    train, val, test, features = get_train_val_slit(level, fold)
+    train, val, test, features = get_train_val_slit(level, fold, augment_events=augment_events)
 
     # make lgb datasets
     labels = ['demand']
@@ -706,8 +708,8 @@ def train_lightgbm_model(level, fold=1, params={}, model_dir='models/uncertainty
 
     # perform training
     evals_result = {}  # to record eval results for plotting
-    model = lgb.train(params, train_set, num_boost_round=2500, early_stopping_rounds=50,
-                      valid_sets=[val_set], verbose_eval=50,  # fobj="mae",#feval = "mae",
+    model = lgb.train(params, train_set, num_boost_round=num_boost_round, early_stopping_rounds=early_stopping_rounds,
+                      valid_sets=[val_set], verbose_eval=verbose_eval,  # fobj="mae",#feval = "mae",
                       evals_result=evals_result)
 
     model.save_model(model_dir + model_name + "-level{}-fold{}.txt".format(level, fold))
@@ -736,3 +738,21 @@ def lightgbm_pred_to_df(y_pred, df):
     # y_pred_df['state_id'] = y_pred_df['id'].map(lambda x: '_'.join(x.split('_')[3:4]))
 
     return y_pred_df
+
+
+def plot_lgb_metrics(evals_result, title):
+    score = evals_result['valid_0']['l1']
+    f, ax = plt.subplots(1, 1, figsize=(12, 4))
+    ax.plot(score)
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("L1 loss")
+    ax.set_title(title)
+    ax.set_xlim(0)
+    ax.text(0.95, 0.95, "Best val. score: {:.5f}".format(min(score)),
+            ha='right', va='top', transform=ax.transAxes)
+    plt.show()
+
+
+def plot_result_list(result_list, title_list):
+    for evals_result, title in zip(result_list, title_list):
+        plot_lgb_metrics(evals_result, title)

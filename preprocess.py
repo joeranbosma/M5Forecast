@@ -33,9 +33,13 @@ categorical_features = {
 
 
 # adapted from from https://www.kaggle.com/robertburbidge/lightgbm-poisson-w-scaled-pinball-loss
-def preprocess(level, n_years, DAYS_PRED=None, save_prepared_dataset=False, data_dir=None):
+def preprocess(level, n_years, DAYS_PRED=None, save_prepared_dataset=False, data_dir=None, augment_events=False):
     # read data for pipeline from lightgbm-poisson-w-scaled-pinball-loss.ipynb
     calendar, sell_prices, sales_train_val, submission = read_data()  # with memory reduction
+
+    # Add days prior/after event as new event, if enabled
+    if augment_events:
+        calendar = augment_calendar_events(calendar)
 
     # read comverted sales
     converted_sales = read_converted_sales(level=level, data_dir=data_dir)
@@ -217,13 +221,17 @@ def get_features(level, prediction_lag=28, sell_price_features=True):
     return features
 
 
-def read_and_preprocess_data(level, data_dir='data/', day_start=None, prediction_lag=28, verbose=True):
+def read_and_preprocess_data(level, data_dir='data/', day_start=None, prediction_lag=28,
+                             augment_events=False, verbose=True):
     # try reading from file
     if day_start is None:
-        day_start = '2011_01_29' #'2014_04_26' if level == 12 else '2011_01_29'
+        day_start = '2011_01_29'  #'2014_04_26' if level == 12 else '2011_01_29'
+
+    aug_fn_part = "_aug_events" if augment_events else ""
+
     day_end = '2016_04_24'
-    fn = data_dir + 'prep/level_{}_simple_fe_{}_{}_normalised_demand_lag_{}.pickle'.format(
-        level, day_start, day_end, prediction_lag)
+    fn = data_dir + 'prep/level_{}_simple_fe{}_{}_{}_normalised_demand_lag_{}.pickle'.format(
+        level, aug_fn_part, day_start, day_end, prediction_lag)
 
     # check if already preprocessed
     if os.path.exists(fn):
@@ -234,7 +242,7 @@ def read_and_preprocess_data(level, data_dir='data/', day_start=None, prediction
         n_years = 2 if level == 12 else 6
 
         # preform preprocessing
-        data = preprocess(level=level, n_years=n_years, DAYS_PRED=prediction_lag,
+        data = preprocess(level=level, n_years=n_years, DAYS_PRED=prediction_lag, augment_events=augment_events,
                           save_prepared_dataset=True, data_dir=data_dir)
 
     print("Converting to pandas data..") if verbose else None
@@ -251,3 +259,76 @@ def read_and_preprocess_data(level, data_dir='data/', day_start=None, prediction
     print(features) if verbose else None
 
     return data, features, available_cat_features
+
+
+def add_event(cal, idx, new_event_name, new_event_type, num=1, inplace=True):
+    if not inplace:
+        cal = cal.copy()
+
+    # categorical calendar
+    name_col = 'event_name_{}'.format(num)
+    type_col = 'event_type_{}'.format(num)
+
+    if str(cal[name_col].dtype) == "category":
+        # create new categories
+        if not new_event_name in cal[name_col].cat.categories:
+            cal[name_col].cat.add_categories(new_event_name, inplace=True)
+        if not new_event_type in cal[type_col].cat.categories:
+            cal[type_col].cat.add_categories(new_event_type, inplace=True)
+
+    # add 'new' event
+    cal.loc[idx, name_col] = new_event_name
+    cal.loc[idx, type_col] = new_event_type
+
+    return cal
+
+
+def augment_calendar_events(calendar, verbose=False):
+    cal = calendar.copy()
+    d_days = [int(d[2:]) for d in list(cal.d.values)]
+    d_start = min(d_days)
+    d_end = max(d_days)
+
+    for event_name in calendar.event_name_1.unique():
+        if event_name is np.nan:
+            continue
+
+        # select event's days
+        d_days = list(calendar[calendar.event_name_1 == event_name].d.values)
+        print(event_name, d_days) if verbose else None
+
+        # select event's type
+        event_type = calendar[calendar.event_name_1 == event_name].event_type_1.iloc[0]
+
+        # loop through week prior and week after
+        for i in range(-7, 8):
+            if i == 0:
+                continue
+
+            # create list of new d_days
+            aug_d_nums = [int(d[2:]) + i for d in d_days]
+
+            # loop over augmented list
+            for d_num in aug_d_nums:
+                if d_num < d_start or d_num > d_end:
+                    continue
+                d_day = 'd_' + str(d_num)
+
+                # create new name for event
+                postfix = ('+' if i > 0 else '') + str(i)
+                new_event_name = event_name + postfix
+                new_event_type = event_type + postfix
+
+                # print(d_day, new_event_name)
+                # check if date is 'available'
+                idx = calendar[calendar.d == d_day].index[0]
+                target_event = calendar.loc[idx, 'event_name_1']
+
+                if target_event is np.nan:
+                    add_event(cal, idx, new_event_name, new_event_type, num=1)
+                elif calendar.loc[idx, 'event_name_2'] is np.nan:
+                    add_event(cal, idx, new_event_name, new_event_type, num=2)
+                else:
+                    print("Skipped day {} to {}, both events filled".format(d_day, new_event_name)) if verbose else None
+
+    return cal
