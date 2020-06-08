@@ -101,8 +101,10 @@ def preprocess(level, n_years, DAYS_PRED=None, save_prepared_dataset=False, data
     data = reduce_mem_usage(aggregate_adapted_fe(data, DAYS_PRED=DAYS_PRED))
 
     if save_prepared_dataset:
-        fn = data_dir + 'prep/level_{}_simple_fe_{}_{}_normalised_demand_lag_{}.pickle'.format(
-            level, data.date.min().date().strftime("%Y_%m_%d"), data.date.max().date().strftime("%Y_%m_%d"),
+        aug_fn_part = "_aug_events" if augment_events else ""
+
+        fn = data_dir + 'prep/level_{}_simple_fe{}_{}_{}_normalised_demand_lag_{}.pickle'.format(
+            level, aug_fn_part, data.date.min().date().strftime("%Y_%m_%d"), data.date.max().date().strftime("%Y_%m_%d"),
             DAYS_PRED
         )
         print("Saving to file..")
@@ -284,6 +286,8 @@ def add_event(cal, idx, new_event_name, new_event_type, num=1, inplace=True):
 
 
 def augment_calendar_events(calendar, verbose=False):
+    print("Adding days prior/after events to calendar..")
+
     cal = calendar.copy()
     d_days = [int(d[2:]) for d in list(cal.d.values)]
     d_start = min(d_days)

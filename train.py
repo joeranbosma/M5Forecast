@@ -549,7 +549,8 @@ def add_lgb_predictions(data, level, features, lgb_prediction_dir):
 def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size, ref, calendar, quantiles=None,
                             data_dir='data/', model_dir='models/uncertainty/', warmup_lr_list=None,
                             finetune_lr_list=None, warmup_epochs=10, finetune_epochs=10, lgb_prediction=False,
-                            lgb_prediction_dir = None, model_name="stepped_lr", validation_steps=None, verbose=True):
+                            lgb_prediction_dir=None, model_name="stepped_lr", validation_steps=None,
+                            augment_events=False, verbose=True):
     if warmup_lr_list is None:
         warmup_lr_list = [1e-5, 1e-4, 1e-3, 2e-3, 3e-3, 1e-3]
     if finetune_lr_list is None:
@@ -559,7 +560,7 @@ def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size
     print("Starting level {}..".format(level)) if verbose else None
 
     # read data
-    data, features, available_cat_features = read_and_preprocess_data(level=level)
+    data, features, available_cat_features = read_and_preprocess_data(level=level, augment_events=augment_events)
     if lgb_prediction:
         print("Adding lgb prediction as feature") if verbose else None
         data, features = add_lgb_predictions(data, level, features, lgb_prediction_dir)
