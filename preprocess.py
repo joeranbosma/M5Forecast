@@ -227,7 +227,7 @@ def read_and_preprocess_data(level, data_dir='data/', day_start=None, prediction
                              augment_events=False, verbose=True):
     # try reading from file
     if day_start is None:
-        day_start = '2011_01_29'  #'2014_04_26' if level == 12 else '2011_01_29'
+        day_start = '2014_04_26' if level == 12 else '2011_01_29'
 
     aug_fn_part = "_aug_events" if augment_events else ""
 
@@ -237,7 +237,7 @@ def read_and_preprocess_data(level, data_dir='data/', day_start=None, prediction
 
     # check if already preprocessed
     if os.path.exists(fn):
-        print("Reading from file..") if verbose else None
+        print("Reading from file {}..".format(fn)) if verbose else None
         data = pd.read_pickle(fn)
     else:
         # choose number of years to include

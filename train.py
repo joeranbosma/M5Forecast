@@ -17,9 +17,10 @@ import tensorflow.keras.backend as K
 from tensorflow.keras.utils import Sequence
 import tensorflow as tf
 
-from flow import select_day_nums, evaluate_model
-from model_builder import get_pinball_losses
+from flow import select_day_nums, evaluate_model, save_object
 from preprocess import read_and_preprocess_data
+from model_builder import (get_pinball_losses, get_simple_dense_model, get_simple_dist_model,
+                           get_variable_dist_model, get_direct_dist_model)
 
 
 class WindowBatchCreator(Sequence):
@@ -527,10 +528,11 @@ def prepare_training(data, features, labels, available_cat_features, batch_size=
     return train_batch_creator, val_batch_creator, get_generators, INP_SHAPE, losses
 
 
-def add_lgb_predictions(data, level, features, lgb_prediction_dir):
+def add_lgb_predictions(data, level, features, lgb_prediction_dir, prediction_lag=28):
     # read predictions
-    lgb_predictions = pd.read_csv(lgb_prediction_dir + 'predictions_level{}.csv'.format(level),
-                                  index_col=0)
+    fn = lgb_prediction_dir + 'predictions_level{}_lag{}.csv'.format(level, prediction_lag)
+    print("Adding LightGBM prediction from {}..".format(fn))
+    lgb_predictions = pd.read_csv(fn, index_col=0)
 
     # drop 'demand' column and convert date to pandas datetime
     if 'demand' in lgb_predictions.columns:
@@ -550,7 +552,7 @@ def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size
                             data_dir='data/', model_dir='models/uncertainty/', warmup_lr_list=None,
                             finetune_lr_list=None, warmup_epochs=10, finetune_epochs=10, lgb_prediction=False,
                             lgb_prediction_dir=None, model_name="stepped_lr", validation_steps=None,
-                            augment_events=False, verbose=True):
+                            augment_events=False, prediction_lag=28, verbose=True):
     if warmup_lr_list is None:
         warmup_lr_list = [1e-5, 1e-4, 1e-3, 2e-3, 3e-3, 1e-3]
     if finetune_lr_list is None:
@@ -560,10 +562,11 @@ def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size
     print("Starting level {}..".format(level)) if verbose else None
 
     # read data
-    data, features, available_cat_features = read_and_preprocess_data(level=level, augment_events=augment_events)
+    data, features, available_cat_features = read_and_preprocess_data(level=level, augment_events=augment_events,
+                                                                      prediction_lag=prediction_lag)
     if lgb_prediction:
         print("Adding lgb prediction as feature") if verbose else None
-        data, features = add_lgb_predictions(data, level, features, lgb_prediction_dir)
+        data, features = add_lgb_predictions(data, level, features, lgb_prediction_dir, prediction_lag=prediction_lag)
 
     # setup for training
     batch_size = warmup_batch_size[level]
@@ -648,6 +651,66 @@ def perform_training_scheme(level, model, warmup_batch_size, finetune_batch_size
     return model, logger, metrics1, metrics2, metrics3
 
 
+def run_experiment(nodes_settings, input_shapes, warmup_batch_size, finetune_batch_size, ref, calendar, model_dir,
+                   mode="dense", augment_events=False, lgb_prediction=False, lgb_prediction_dir=None):
+    """
+    Run experiment on the performance of the final "distribution layer"
+    nodes_settings: number of nodes per layer to test
+                    should be in the format {level: [n1, n2, ...], ...}
+    mode: distribution layer to test, either "dense", "dist2", "dist4" or "direct"
+    """
+
+    # setup model builder function
+    if mode == "dense":
+        model_func = get_simple_dense_model
+    elif mode == "dist2":
+        model_func = get_simple_dist_model
+    elif mode == "dist4":
+        model_func = get_variable_dist_model
+    elif mode == "direct":
+        model_func = get_direct_dist_model
+
+    # track metrics
+    logger_list = []
+    part1_metrics = []
+    part2_metrics = []
+    part3_metrics = []
+
+    # loop over the levels
+    for level, node_options in nodes_settings.items():
+
+        # loop over the number of nodes per layer
+        for num_nodes in node_options:
+            model_name = "model_{}_{}".format(mode, num_nodes)
+
+            # build model
+            model = model_func(inp_shape=input_shapes[level], num_nodes=num_nodes, final_activation="exponential")
+            model.summary()
+
+            # train model
+            warmup_lr_list = [1e-3, 1e-3, 1e-3,  # save part 1
+                              1e-3, 1e-3, 1e-3]  # save part 2
+            finetune_lr_list = [1e-4, 1e-4, 1e-5, 1e-5]
+            model, logger, metrics1, metrics2, metrics3 = perform_training_scheme(
+                level, model, warmup_batch_size, finetune_batch_size, ref, calendar,
+                model_dir=model_dir, model_name=model_name, warmup_lr_list=warmup_lr_list,
+                finetune_lr_list=finetune_lr_list, lgb_prediction=lgb_prediction,
+                lgb_prediction_dir=lgb_prediction_dir, augment_events=augment_events,
+            )
+
+            # save metrics
+            logger_list.append(logger)
+            part1_metrics.append(metrics1)
+            part2_metrics.append(metrics2)
+            part3_metrics.append(metrics3)
+            for i, m in enumerate([part1_metrics, part2_metrics, part3_metrics]):
+                save_object(m, model_dir + mode + "_part{}_metrics.pickle".format(i + 1))
+
+            # save training metrics
+            save_object(logger.train_metrics, model_dir + model_name + "_metrics_train.pickle")
+            save_object(logger.val_metrics, model_dir + model_name + "_metrics_val.pickle")
+
+
 def get_chronological_train_val_split(data, fold=1, num_folds=5, verbose=True):
     # get chronological train/val split
     # fold 1 has the final 376 validation days
@@ -674,9 +737,10 @@ def get_chronological_train_val_split(data, fold=1, num_folds=5, verbose=True):
     return train, val
 
 
-def get_train_val_slit(level, fold, augment_events=False, verbose=True):
+def get_train_val_slit(level, fold, prediction_lag=28, augment_events=False, verbose=True):
     # read data
     data, features, available_cat_features = read_and_preprocess_data(level=level, verbose=verbose,
+                                                                      prediction_lag=prediction_lag,
                                                                       augment_events=augment_events)
 
     # leave final days alone
@@ -690,13 +754,15 @@ def get_train_val_slit(level, fold, augment_events=False, verbose=True):
 
 
 def train_lightgbm_model(level, fold=1, params={}, model_dir='models/uncertainty/',
+                         prediction_lag=28,
                          model_name="lightgbm", augment_events=False, verbose=True,
                          num_boost_round=2500, early_stopping_rounds=50, verbose_eval=50):
     # only require lightgbm to be installed when calling this function
     import lightgbm as lgb
 
     # read data
-    train, val, test, features = get_train_val_slit(level, fold, augment_events=augment_events)
+    train, val, test, features = get_train_val_slit(level, fold, augment_events=augment_events,
+                                                    prediction_lag=prediction_lag)
 
     # make lgb datasets
     labels = ['demand']
@@ -713,7 +779,7 @@ def train_lightgbm_model(level, fold=1, params={}, model_dir='models/uncertainty
                       valid_sets=[val_set], verbose_eval=verbose_eval,  # fobj="mae",#feval = "mae",
                       evals_result=evals_result)
 
-    model.save_model(model_dir + model_name + "-level{}-fold{}.txt".format(level, fold))
+    model.save_model(model_dir + model_name + "-level{}-lag{}-fold{}.txt".format(level, prediction_lag, fold))
     ax = lgb.plot_metric(evals_result, metric='l1')
     plt.show()
 

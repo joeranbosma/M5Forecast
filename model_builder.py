@@ -293,3 +293,21 @@ def get_direct_dist_model(inp_shape, num_nodes=256, final_activation=None, clear
     model = Model(inputs=inp, outputs=outs)
 
     return model
+
+
+def Dist4(num_nodes, inp_shape):
+    # shorthand
+    return get_variable_dist_model(num_nodes=num_nodes, inp_shape=inp_shape,
+                                   final_activation="exponential", clear_session=False)
+
+
+def Dist2(num_nodes, inp_shape):
+    # shorthand
+    return get_simple_dist_model(num_nodes=num_nodes, inp_shape=inp_shape,
+                                 final_activation="exponential", clear_session=False)
+
+
+def Direct(num_nodes, inp_shape):
+    # shorthand
+    return get_direct_dist_model(num_nodes=num_nodes, inp_shape=inp_shape,
+                                 final_activation="exponential", clear_session=False)
